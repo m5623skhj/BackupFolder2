@@ -1,0 +1,51 @@
+LanServerError Document
+
+
+
+0 (NO_ERR) : 
+에러 없음
+
+1 (WSASTARTUP_ERR) : 
+WSASTARTUP 함수 수행중 에러 발생
+
+2 (LISTEN_SOCKET_ERR) : 
+Listen 소켓이 socket 함수 수행중 에러 발생
+
+3 (LISTEN_BIND_ERR) : 
+Listen 소켓이 bind 함수 수행중 에러 발생
+
+4 (LISTEN_LISTEN_ERR) : 
+Listen 소켓이 listen 함수 수행중 에러 발생
+
+5 (BEGINTHREAD_ERR) : 
+beginthreadex 함수 호출 결과에서 Accept 스레드 혹은 Worker 스레드가 생성에 실패함
+
+6 (SETSOCKOPT_ERR) : 
+setsockopt 함수 수행중 에러 발생
+
+7 (WORKERIOCP_NULL_ERR) : 
+WorkerThread 의 IOCP 핸들이 NULL 임
+
+8 (SESSION_NULL_ERR) : 
+찾으려고 하는 세션이 해당 객체가 관리하고 있는 세션 맵에 들어있는 값이 아님
+
+9 (ACCEPT_ERR) : 
+Accept 함수 수행중 WSAEWOULDBLOCK 혹은 WSAEINTR 이 아닌 에러 발생
+
+10 (WSARECV_ERR) : 
+WSARecv 함수 수행중 WSA_IO_PENDING 이 아닌 에러가 발생
+
+11 (WSASEND_ERR) : 
+WSASend 함수 수행중 WSA_IO_PENDING 이 아닌 에러가 발생
+
+12 (OVERLAPPED_NULL_ERR) : 
+GetQueuedCompletionStatus 함수의 수행 결과에서 세션이 NULL 이 아님에도 Overlapped 값이 NULL 임
+
+13 (SERIALIZEBUF_NULL_ERR) :
+인자로 전달받은 직렬화 버퍼의 포인터가 NULL 임 
+
+14 (RINGBUFFER_MAX_SIZE_ERR) :
+세션안에 있는 링버퍼의 사용되고 있는 크기가 지정한 최대 크기에 도달함
+
+15 (RINGBUFFER_MIN_SIZE_ERR) :
+세션안에 있는 링버퍼의 사이즈가 0 이거나 혹은 그 미만임 
