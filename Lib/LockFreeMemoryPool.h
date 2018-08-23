@@ -31,7 +31,7 @@ private:
 	int										m_iUseCount;
 	int										m_iAllocCount;
 	__declspec(align(16)) st_BLOCK_INFO		m_Top;
-	
+
 public:
 	CLockFreeMemoryPool(UINT MakeInInit, bool bIsPlacementNew);
 	~CLockFreeMemoryPool();
@@ -47,8 +47,8 @@ template <typename Data>
 CLockFreeMemoryPool<Data>::CLockFreeMemoryPool(UINT MakeInInit, bool bIsPlacementNew)
 	: m_bIsPlacementNew(bIsPlacementNew), m_iUseCount(0), m_iAllocCount(0)
 {
-	m_Top.pBlockPtr = nullptr;
 	m_Top.ullBlockID = 0;
+	m_Top.pBlockPtr = nullptr;
 	for (UINT i = 0; i < MakeInInit; i++)
 	{
 		++m_Top.ullBlockID;
@@ -89,16 +89,16 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 {
 	__declspec(align(16)) st_BLOCK_INFO CurTop, NewTop;
 	InterlockedIncrement((UINT*)&m_iUseCount);
-	
+
 	if (!m_bIsPlacementNew)
 	{
 		if (m_Top.pBlockPtr != nullptr)
 		{
 			do {
+				CurTop.ullBlockID = m_Top.ullBlockID;
 				CurTop.pBlockPtr = m_Top.pBlockPtr;
 
 				//CurTop = m_Top;
-
 				//CurTop.pBlockPtr = (st_BLOCK_NODE*)1;
 				//CurTop.ullBlockID = -1;
 				//InterlockedCompareExchange128((LONG64*)&m_Top, 1, -1, (LONG64*)&CurTop);
@@ -108,13 +108,12 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 					CurTop.pBlockPtr = new st_BLOCK_NODE();
 					break;
 				}
-				CurTop.ullBlockID = m_Top.ullBlockID;
 
-				NewTop.pBlockPtr = CurTop.pBlockPtr->stpNextBlock;
 				NewTop.ullBlockID = CurTop.ullBlockID + 1;
+				NewTop.pBlockPtr = CurTop.pBlockPtr->stpNextBlock;
 			} while (!InterlockedCompareExchange128(
 				(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pBlockPtr, (LONG64*)&CurTop));
-			
+
 			CurTop.pBlockPtr->stpNextBlock = nullptr;
 		}
 		else
@@ -128,10 +127,10 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 		if (m_Top.pBlockPtr != nullptr)
 		{
 			do {
+				CurTop.ullBlockID = m_Top.ullBlockID;
 				CurTop.pBlockPtr = m_Top.pBlockPtr;
 
 				//CurTop = m_Top;
-
 				//CurTop.pBlockPtr = (st_BLOCK_NODE*)1;
 				//CurTop.ullBlockID = -1;
 				//InterlockedCompareExchange128((LONG64*)&m_Top, 1, -1, (LONG64*)&CurTop);
@@ -141,10 +140,9 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 					CurTop.pBlockPtr = (st_BLOCK_NODE*)malloc(sizeof(st_BLOCK_NODE));
 					break;
 				}
-				CurTop.ullBlockID = m_Top.ullBlockID;
 
-				NewTop.pBlockPtr = CurTop.pBlockPtr->stpNextBlock;
 				NewTop.ullBlockID = CurTop.ullBlockID + 1;
+				NewTop.pBlockPtr = CurTop.pBlockPtr->stpNextBlock;
 			} while (!InterlockedCompareExchange128(
 				(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pBlockPtr, (LONG64*)&CurTop));
 		}
@@ -166,25 +164,24 @@ void CLockFreeMemoryPool<Data>::Push(Data *pData)
 	if (PushPtr->iCode != NODE_CODE)
 		return;
 
-	st_BLOCK_INFO CurTop, NewTop;
-	NewTop.pBlockPtr = PushPtr;
+	st_BLOCK_NODE *pCurTop = nullptr;
+	//st_BLOCK_INFO CurTop, NewTop;
+	//NewTop.pBlockPtr = PushPtr;
 	//st_BLOCK_NODE *pCurTop;
 	do {
-		CurTop.pBlockPtr = m_Top.pBlockPtr;
-		CurTop.ullBlockID = m_Top.ullBlockID;
-		
-		NewTop.pBlockPtr->stpNextBlock = CurTop.pBlockPtr;
-		NewTop.ullBlockID = CurTop.ullBlockID + 1;
+		pCurTop = m_Top.pBlockPtr;
+		//CurTop.pBlockPtr = m_Top.pBlockPtr;
+		PushPtr->stpNextBlock = pCurTop;
+		//NewTop.pBlockPtr->stpNextBlock = CurTop.pBlockPtr;
 
 		//pCurTop = m_Top.pBlockPtr;
 		//PushPtr->stpNextBlock = pCurTop;
-
 		//PushPtr->stpNextBlock = m_Top.pBlockPtr;
-	} while (!InterlockedCompareExchange128(
-		(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pBlockPtr, (LONG64*)&CurTop));
-		//while (InterlockedCompareExchange64(
+	} /*while (!InterlockedCompareExchange128(
+		(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pBlockPtr, (LONG64*)&CurTop));*/
+	while (InterlockedCompareExchange64(
 		//(volatile LONG64*)&m_Top.pBlockPtr, (LONG64)PushPtr, (LONG64)pCurTop) != (LONG64)pCurTop);
-		//(volatile LONG64*)&m_Top.pBlockPtr, (LONG64)PushPtr, (LONG64)PushPtr->stpNextBlock) != (LONG64)PushPtr->stpNextBlock);
+		(LONG64*)&m_Top.pBlockPtr, (LONG64)PushPtr, (LONG64)pCurTop) != (LONG64)pCurTop);
 
 	InterlockedDecrement((UINT*)&m_iUseCount);
 

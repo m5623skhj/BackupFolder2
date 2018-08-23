@@ -4,7 +4,7 @@
 template <typename Data>
 class CLockFreeStack
 {
-private :
+private:
 	struct st_NODE
 	{
 		Data		ItemData;
@@ -20,7 +20,7 @@ private :
 	__declspec(align(16)) st_TOP_INFO				m_Top;
 	CLockFreeMemoryPool<st_NODE>					*m_pLockFreeMemoryPool;
 
-public :
+public:
 	CLockFreeStack();
 	~CLockFreeStack();
 
@@ -56,25 +56,28 @@ CLockFreeStack<Data>::~CLockFreeStack()
 template <typename Data>
 void CLockFreeStack<Data>::Push(Data InputData)
 {
-	//st_NODE *pNewTop = m_pLockFreeMemoryPool->Pop();
-	//st_NODE *pCurTop;
-	st_TOP_INFO CurTop, NewTop;
-	NewTop.pTopNodePtr = m_pLockFreeMemoryPool->Pop();
+	st_NODE *pNewTop = m_pLockFreeMemoryPool->Pop();
+	st_NODE *pCurTop;
+	//st_TOP_INFO CurTop, NewTop;
+	//NewTop.pTopNodePtr = m_pLockFreeMemoryPool->Pop();
 	do {
-		CurTop.pTopNodePtr = m_Top.pTopNodePtr;
-		CurTop.ullBlockID = m_Top.ullBlockID;
+		pCurTop = m_Top.pTopNodePtr;
+		//CurTop.pTopNodePtr = m_Top.pTopNodePtr;
+		//CurTop.ullBlockID = m_Top.ullBlockID;
 
-		NewTop.pTopNodePtr->pNext = CurTop.pTopNodePtr;
-		NewTop.ullBlockID = CurTop.ullBlockID + 1;
-		NewTop.pTopNodePtr->ItemData = InputData;
+		pNewTop->pNext = pCurTop;
+		pNewTop->ItemData = InputData;
+		//NewTop.pTopNodePtr->pNext = CurTop.pTopNodePtr;
+		////NewTop.ullBlockID = CurTop.ullBlockID + 1;
+		//NewTop.pTopNodePtr->ItemData = InputData;
 
 		//pCurTop = m_Top.pTopNodePtr;
 		//pNewTop->pNext = pCurTop;
 		//pNewTop->ItemData = InputData;
-	} while (!InterlockedCompareExchange128(
-		(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pTopNodePtr, (LONG64*)&CurTop));
-		//while ((InterlockedCompareExchange64(
-		//(volatile LONG64*)&m_Top.pTopNodePtr, (LONG64)pNewTop, (LONG64)pCurTop) != (LONG64)pCurTop));
+	} /*while (!InterlockedCompareExchange128(
+		(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pTopNodePtr, (LONG64*)&CurTop));*/
+	while (InterlockedCompareExchange64(
+		(LONG64*)&m_Top.pTopNodePtr, (LONG64)pNewTop, (LONG64)pCurTop) != (LONG64)pCurTop);
 
 	InterlockedIncrement(&m_iRestStackSize);
 }
@@ -87,19 +90,21 @@ bool CLockFreeStack<Data>::Pop(Data *pOutData)
 
 	do {
 		//CurTop = m_Top;
-		CurTop.pTopNodePtr = (st_NODE*)1;
-		CurTop.ullBlockID = -1;
-		InterlockedCompareExchange128((LONG64*)&m_Top, 1, -1, (LONG64*)&CurTop);
-		if (CurTop.pTopNodePtr == nullptr)
-		{
-			pOutData = nullptr;
-			return false;
-		}
-		NewTop.pTopNodePtr = CurTop.pTopNodePtr->pNext;
+		CurTop.ullBlockID = m_Top.ullBlockID;
+		CurTop.pTopNodePtr = m_Top.pTopNodePtr;
+		//CurTop.ullBlockID = -1;
+		//CurTop.pTopNodePtr = (st_NODE*)1;
+		//InterlockedCompareExchange128((LONG64*)&m_Top, 1, -1, (LONG64*)&CurTop);
+		//if (CurTop.pTopNodePtr == nullptr)
+		//{
+		//	pOutData = nullptr;
+		//	return false;
+		//}
 		NewTop.ullBlockID = CurTop.ullBlockID + 1;
+		NewTop.pTopNodePtr = CurTop.pTopNodePtr->pNext;
 	} while (!InterlockedCompareExchange128(
-	(volatile LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pTopNodePtr, (LONG64*)&CurTop));
-	
+		(volatile LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pTopNodePtr, (LONG64*)&CurTop));
+
 	*pOutData = CurTop.pTopNodePtr->ItemData;
 	m_pLockFreeMemoryPool->Push(CurTop.pTopNodePtr);
 	return true;

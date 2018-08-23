@@ -41,6 +41,7 @@ private:
 		///////////////////////////
 	};
 
+	// ullBlockID 를 위로 올리기
 	struct st_Q_NODE_BLOCK
 	{
 		st_NODE									*pNode;
@@ -178,8 +179,8 @@ void CLockFreeQueue<Data>::Enqueue(Data InputData)
 
 	while (1)
 	{
-		CurTail.pNode = m_Tail.pNode;
 		CurTail.ullBlockID = m_Tail.ullBlockID;
+		CurTail.pNode = m_Tail.pNode;
 		NewTail.ullBlockID = CurTail.ullBlockID + 1;
 
 		/////////////////////////////////////////////////////
@@ -262,10 +263,10 @@ bool CLockFreeQueue<Data>::Dequeue(Data *pOutData)
 
 	while (1)
 	{
-		CurHead.pNode = m_Head.pNode;
 		CurHead.ullBlockID = m_Head.ullBlockID;
-		CurTail.pNode = m_Tail.pNode;
+		CurHead.pNode = m_Head.pNode;
 		CurTail.ullBlockID = m_Tail.ullBlockID;
+		CurTail.pNode = m_Tail.pNode;
 
 		// Head 와 Tail 이 같다면 DeQueue 를 진행 할 수 없으므로 따로 처리함
 		if (CurHead.pNode == CurTail.pNode)
@@ -288,8 +289,8 @@ bool CLockFreeQueue<Data>::Dequeue(Data *pOutData)
 				(LONG64*)&m_Tail, (LONG64)CurTail.ullBlockID + 1, (LONG64)CurTail.pNode->pNext, (LONG64*)&CurTail);
 			continue;
 		}
-		NewHead.pNode = CurHead.pNode->pNext;
 		NewHead.ullBlockID = CurHead.ullBlockID + 1;
+		NewHead.pNode = CurHead.pNode->pNext;
 
 		if (NewHead.pNode == nullptr)
 			continue;
