@@ -49,7 +49,7 @@ public:
 
 template <typename Data>
 CLockFreeMemoryPool<Data>::CLockFreeMemoryPool(UINT MakeInInit, bool bIsPlacementNew)
-	: m_bIsPlacementNew(bIsPlacementNew), m_iUseCount(0), m_iAllocCount(0)
+	: m_bIsPlacementNew(bIsPlacementNew), m_iUseCount(0), m_iAllocCount(MakeInInit)
 {
 	m_Top.ullBlockID = 0;
 	m_Top.pBlockPtr = nullptr;
@@ -61,7 +61,6 @@ CLockFreeMemoryPool<Data>::CLockFreeMemoryPool(UINT MakeInInit, bool bIsPlacemen
 		NewNode->stpNextBlock = m_Top.pBlockPtr;
 		m_Top.pBlockPtr = NewNode;
 	}
-	m_iAllocCount = MakeInInit;
 }
 
 template <typename Data>
@@ -193,13 +192,14 @@ void CLockFreeMemoryPool<Data>::Push(Data *pData)
 		PushPtr->NodeData.~Data();
 }
 
-#include "Common.h"
+//#include "CrashDump.h"
+//CCrashDump dump;
 
 ///////////////////////////////
 // CTLSMemoryPool Class
 ///////////////////////////////
 
-#define df_CHUNK_ELEMENT_SIZE						500
+#define df_CHUNK_ELEMENT_SIZE						300
 
 template <typename Data>
 class CTLSMemoryPool
@@ -233,62 +233,52 @@ private:
 
 		// 마지막 노드가 할당 받았다면 OutNode 에 false 를 넣어
 		// Chunk 가 비었다는 것을 알림
-		T* NodeAlloc(bool *pOutNodeCanAllocMore);
-		bool NodeFree();
+		//T* NodeAlloc(bool *pOutNodeCanAllocMore);
+		//bool NodeFree();
 	};
 	bool									m_bIsPlacementNew;
+	
 	int										m_iUseChunkCount;
 	int										m_iAllocChunkCount;
+	unsigned int							m_uiUseNodeCount;
+
 	int										m_iTLSIndex;
 	CLockFreeMemoryPool<CChunk<Data>>		*m_pChunkMemoryPool;
 
 public:
-	CTLSMemoryPool(UINT MakeInInit, bool bIsPlacementNew);
+	CTLSMemoryPool(UINT MakeChunkInInit, bool bIsPlacementNew);
 	~CTLSMemoryPool();
 
 	Data *ChunkAlloc();
 	void ChunkFree(Data *pData);
 
-	int GetUseChunkCount()   { return m_iUseChunkCount; }
-	int GetAllocChunkCount() { return m_iAllocChunkCount; }
+	int GetUseChunkCount()   { return m_pChunkMemoryPool->GetUseCount(); }
+	int GetAllocChunkCount() { return m_pChunkMemoryPool->GetAllocCount(); }
+
+	int GetUseNodeCount() { return m_uiUseNodeCount; }
 };
 
 ///////////////////////////////
 // CTLSMemoryPool Method
 ///////////////////////////////
 template <typename Data>
-CTLSMemoryPool<Data>::CTLSMemoryPool(UINT MakeInInit, bool bIsPlacementNew) :
-	m_bIsPlacementNew(bIsPlacementNew), m_iUseChunkCount(0), m_iAllocChunkCount(MakeInInit)
+CTLSMemoryPool<Data>::CTLSMemoryPool(UINT MakeChunkInInit, bool bIsPlacementNew) :
+	m_bIsPlacementNew(bIsPlacementNew), m_iUseChunkCount(0), m_uiUseNodeCount(0), m_iAllocChunkCount(MakeChunkInInit)
 {
 	m_iTLSIndex = TlsAlloc();
 	if (m_iTLSIndex == TLS_OUT_OF_INDEXES)
 	{
-		dump.Crash();
+		printf("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+		//dump.Crash();
 	}
-	m_pChunkMemoryPool = new CLockFreeMemoryPool<CChunk<Data> >(MakeInInit, bIsPlacementNew);
+	m_pChunkMemoryPool = new CLockFreeMemoryPool<CChunk<Data> >(MakeChunkInInit, bIsPlacementNew);
 }
 
 template <typename Data>
 CTLSMemoryPool<Data>::~CTLSMemoryPool()
 {
-	CChunk<Data> *TLSChunkPtr = (CChunk<Data>*)TlsGetValue(m_iTLSIndex);
-	if (TLSChunkPtr != NULL)
-		m_pChunkMemoryPool->Push(TLSChunkPtr);
 	TlsFree(m_iTLSIndex);
 	delete m_pChunkMemoryPool;
-}
-
-template <typename Data>
-void CTLSMemoryPool<Data>::ChunkFree(Data *pData)
-{
-	CChunk<Data> *pChunk = ((CChunk<Data>*)*((LONG64*)(pData + 1)));
-	CChunk<Data> *pChunk2 = ((typename CChunk<Data>::st_CHUNK_NODE*)pData)->pAssginedChunk;
-	//CChunk<Data> *pChunk = ((CChunk<Data>*)(*(pData + 1)));
-	UINT retval = InterlockedIncrement(&pChunk->m_uiNodeFreeCount);
-	if (retval >= df_CHUNK_ELEMENT_SIZE)
-		m_pChunkMemoryPool->Push(pChunk);
-	//if (!pChunk->ChunkFree())
-	//	m_pChunkMemoryPool->Push(pChunk);
 }
 
 template <typename Data>
@@ -297,20 +287,52 @@ Data* CTLSMemoryPool<Data>::ChunkAlloc()
 	CChunk<Data> *TLSChunkPtr = (CChunk<Data>*)TlsGetValue(m_iTLSIndex);
 	
 	if (GetLastError() != NO_ERROR)
-		dump.Crash();
+		printf("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+		//dump.Crash();
 
 	if (TLSChunkPtr == NULL)
 	{
 		TLSChunkPtr = m_pChunkMemoryPool->Pop();
+		TLSChunkPtr->m_uiChunkIndex = 0;
+		TLSChunkPtr->m_uiNodeFreeCount = 0;
+
 		TlsSetValue(m_iTLSIndex, TLSChunkPtr);
 	}
 
-	bool ChunkCanAllocMore;
-	Data *pData = TLSChunkPtr->NodeAlloc(&ChunkCanAllocMore);
-	if (!ChunkCanAllocMore)
+	Data *pData = &TLSChunkPtr->m_ChunkData[TLSChunkPtr->m_uiChunkIndex].Data;
+	++TLSChunkPtr->m_uiChunkIndex;
+	if (TLSChunkPtr->m_uiChunkIndex >= df_CHUNK_ELEMENT_SIZE)
 		TlsSetValue(m_iTLSIndex, NULL);
 
+	// 디버깅용 코드
+	// 실제 사용시 제거할 것
+	InterlockedIncrement(&m_uiUseNodeCount);
+	
+
 	return pData;
+}
+
+template <typename Data>
+void CTLSMemoryPool<Data>::ChunkFree(Data *pData)
+{
+	// 템플릿 크기를 알 수 없으므로
+	// 포인터 캐스팅 시 그 크기가 확정적이지 못하므로
+	// 기본 자료형으로 캐스팅 후 다시 캐스팅하여 포인터로 변환시킴
+	//CChunk<Data> *pChunk = ((CChunk<Data>*)*((LONG64*)(pData + 1)));
+	CChunk<Data> *pChunk = ((typename CChunk<Data>::st_CHUNK_NODE*)pData)->pAssginedChunk;
+	UINT retval = InterlockedIncrement(&pChunk->m_uiNodeFreeCount);
+	if (retval > df_CHUNK_ELEMENT_SIZE)
+		printf("A");
+	if (retval >= df_CHUNK_ELEMENT_SIZE)
+	{
+		//pChunk->m_uiChunkIndex = 0;
+		//pChunk->m_uiNodeFreeCount = 0;
+		m_pChunkMemoryPool->Push(pChunk);
+	}
+
+	// 디버깅용 코드
+	// 실제 사용시 제거할 것
+	InterlockedDecrement(&m_uiUseNodeCount);
 }
 
 ///////////////////////////////
@@ -318,8 +340,8 @@ Data* CTLSMemoryPool<Data>::ChunkAlloc()
 ///////////////////////////////
 template <typename Data>
 template <typename T>
-CTLSMemoryPool<Data>::CChunk<T>::CChunk() :
-	m_uiChunkIndex(0), m_uiNodeFreeCount(0)
+CTLSMemoryPool<Data>::CChunk<T>::CChunk() //:
+	//m_uiChunkIndex(0), m_uiNodeFreeCount(0)
 {
 	for (int i = 0; i < df_CHUNK_ELEMENT_SIZE; ++i)
 		m_ChunkData[i].pAssginedChunk = this;
@@ -332,25 +354,25 @@ CTLSMemoryPool<Data>::CChunk<T>::~CChunk()
 
 }
 
-template <typename Data>
-template <typename T>
-T* CTLSMemoryPool<Data>::CChunk<T>::NodeAlloc(bool *pOutNodeCanAllocMore)
-{
-	++m_uiChunkIndex;
-	if (m_uiChunkIndex >= df_CHUNK_ELEMENT_SIZE)
-		*pOutNodeCanAllocMore = false;
-	else
-		*pOutNodeCanAllocMore = true;
+//template <typename Data>
+//template <typename T>
+//T* CTLSMemoryPool<Data>::CChunk<T>::NodeAlloc(bool *pOutNodeCanAllocMore)
+//{
+//	++m_uiChunkIndex;
+//	if (m_uiChunkIndex >= df_CHUNK_ELEMENT_SIZE)
+//		*pOutNodeCanAllocMore = false;
+//	else
+//		*pOutNodeCanAllocMore = true;
+//
+//	return &m_ChunkData[m_uiChunkIndex - 1].Data;
+//}
 
-	return &m_ChunkData[m_uiChunkIndex - 1].Data;
-}
-
-template <typename Data>
-template <typename T>
-bool CTLSMemoryPool<Data>::CChunk<T>::NodeFree()
-{
-	++m_uiNodeFreeCount;
-	if (m_uiNodeFreeCount >= df_CHUNK_ELEMENT_SIZE)
-		return false;
-	return true;
-}
+//template <typename Data>
+//template <typename T>
+//bool CTLSMemoryPool<Data>::CChunk<T>::NodeFree()
+//{
+//	++m_uiNodeFreeCount;
+//	if (m_uiNodeFreeCount >= df_CHUNK_ELEMENT_SIZE)
+//		return false;
+//	return true;
+//}

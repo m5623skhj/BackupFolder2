@@ -6,6 +6,7 @@
 #include "CrashDump.h"
 #include "LanServerSerializeBuf.h"
 
+//CCrashDump dump;
 CCrashDump dump;
 
 CLanServer::CLanServer()
@@ -100,7 +101,7 @@ bool CLanServer::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool 
 		Error.LanServerErr = LANSERVER_ERR::SETSOCKOPT_ERR;
 	}
 
-	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, NumOfWorkerThread);
+	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, /*NumOfWorkerThread*/4);
 	if (m_hWorkerIOCP == NULL)
 	{
 		st_Error Error;
@@ -262,7 +263,7 @@ UINT CLanServer::Accepter()
 		ZeroMemory(&m_pSessionArray[SessionIdx].SendIOData.Overlapped, sizeof(OVERLAPPED));
 
 		m_pSessionArray[SessionIdx].RecvIOData.RingBuffer.InitPointer();
-		m_pSessionArray[SessionIdx].SendIOData.SendQ.InitQueue();
+		//m_pSessionArray[SessionIdx].SendIOData.SendQ.InitQueue();
 
 		/////////////////////////////////////////////////////////////////////////
 		//m_pSessionArray[SessionIdx].New = 0;
@@ -568,8 +569,8 @@ char CLanServer::SendPost(Session *pSession)
 			int err = WSAGetLastError();
 			if (err != ERROR_IO_PENDING)
 			{
-				if (err == WSAENOBUFS)
-					dump.Crash();
+				//if (err == WSAENOBUFS)
+				//	dump.Crash();
 				st_Error Error;
 				Error.GetLastErr = err;
 				Error.LanServerErr = LANSERVER_ERR::WSASEND_ERR;
