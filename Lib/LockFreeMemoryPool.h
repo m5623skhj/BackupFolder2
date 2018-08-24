@@ -199,7 +199,7 @@ void CLockFreeMemoryPool<Data>::Push(Data *pData)
 // CTLSMemoryPool Class
 ///////////////////////////////
 
-#define df_CHUNK_ELEMENT_SIZE						300
+#define df_CHUNK_ELEMENT_SIZE						1000
 
 template <typename Data>
 class CTLSMemoryPool
@@ -240,6 +240,7 @@ private:
 	
 	int										m_iUseChunkCount;
 	int										m_iAllocChunkCount;
+
 	unsigned int							m_uiUseNodeCount;
 
 	int										m_iTLSIndex;
@@ -249,8 +250,8 @@ public:
 	CTLSMemoryPool(UINT MakeChunkInInit, bool bIsPlacementNew);
 	~CTLSMemoryPool();
 
-	Data *ChunkAlloc();
-	void ChunkFree(Data *pData);
+	Data *Alloc();
+	void Free(Data *pData);
 
 	int GetUseChunkCount()   { return m_pChunkMemoryPool->GetUseCount(); }
 	int GetAllocChunkCount() { return m_pChunkMemoryPool->GetAllocCount(); }
@@ -282,7 +283,7 @@ CTLSMemoryPool<Data>::~CTLSMemoryPool()
 }
 
 template <typename Data>
-Data* CTLSMemoryPool<Data>::ChunkAlloc()
+Data* CTLSMemoryPool<Data>::Alloc()
 {
 	CChunk<Data> *TLSChunkPtr = (CChunk<Data>*)TlsGetValue(m_iTLSIndex);
 	
@@ -306,14 +307,14 @@ Data* CTLSMemoryPool<Data>::ChunkAlloc()
 
 	// 디버깅용 코드
 	// 실제 사용시 제거할 것
-	InterlockedIncrement(&m_uiUseNodeCount);
+	//InterlockedIncrement(&m_uiUseNodeCount);
 	
 
 	return pData;
 }
 
 template <typename Data>
-void CTLSMemoryPool<Data>::ChunkFree(Data *pData)
+void CTLSMemoryPool<Data>::Free(Data *pData)
 {
 	// 템플릿 크기를 알 수 없으므로
 	// 포인터 캐스팅 시 그 크기가 확정적이지 못하므로
@@ -332,7 +333,7 @@ void CTLSMemoryPool<Data>::ChunkFree(Data *pData)
 
 	// 디버깅용 코드
 	// 실제 사용시 제거할 것
-	InterlockedDecrement(&m_uiUseNodeCount);
+	//InterlockedDecrement(&m_uiUseNodeCount);
 }
 
 ///////////////////////////////

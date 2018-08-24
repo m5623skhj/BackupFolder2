@@ -3,22 +3,24 @@
 #include <stdio.h>
 #include <time.h>
 
-#define LEAVE_VAULE 30
+#define df_MAX_PROFILE				30
 
-#define NAME_LENGTH 30
-#define CANCLE_RETURN 34
+#define df_LEAVE_VAULE				30
+
+#define df_NAME_LENGTH				30
+#define df_CANCLE_RETURN			34
 
 #define PROFILING TRUE
 #if PROFILING == TRUE
 
 
-struct ProfileStruct
+struct st_PROFILE_INFO
 {
-	char				*m_pName;
+	char				m_pName[df_NAME_LENGTH];
 	bool				m_bIsOpen;
 	int					m_iNumOfCall;
-	long long			m_llMin[LEAVE_VAULE];
-	long long			m_llMax[LEAVE_VAULE];
+	long long			m_llMin[df_LEAVE_VAULE];
+	long long			m_llMax[df_LEAVE_VAULE];
 	long long			m_llTimeSum;
 	LARGE_INTEGER		m_liStartTime;
 };
@@ -27,7 +29,7 @@ class CProfiler
 {
 private:
 	LARGE_INTEGER		m_liStandard;
-	ProfileStruct		m_tProfileStruct[30];
+	st_PROFILE_INFO		m_ProfileInfo[30];
 public:
 	CProfiler();
 	~CProfiler();
@@ -36,12 +38,12 @@ public:
 	void WritingProfile();
 	void InitializeProfiler();
 };
-extern CProfiler oProfiler;
+extern CProfiler g_Profiler;
 
-#define Begin(x) oProfiler.Begin(x)
-#define End(x) oProfiler.End(x)
-#define WritingProfile() oProfiler.WritingProfile()
-#define InitializeProfiler() oProfiler.InitializeProfiler()
+#define Begin(x) g_Profiler.Begin(x)
+#define End(x) g_Profiler.End(x)
+#define WritingProfile() g_Profiler.WritingProfile()
+#define InitializeProfiler() g_Profiler.InitializeProfiler()
 
 #else
 #define Begin(x)  
