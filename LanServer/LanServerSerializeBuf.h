@@ -15,6 +15,8 @@
 // 혹은 GetLastWrite() 를 사용하여 사용자가 쓴 마지막 값을 사이즈로 넘겨줌
 #define HEADER_SIZE			2
 
+#define NUM_OF_CHUNK		30
+
 class CSerializationBuf
 {
 private:
@@ -27,7 +29,8 @@ private:
 	int			m_iUserWriteBefore;
 	UINT		m_iRefCount;
 	char		*m_pSerializeBuffer;
-	static CLockFreeMemoryPool<CSerializationBuf>	*pMemoryPool;
+	//static CLockFreeMemoryPool<CSerializationBuf>	*pMemoryPool;
+	static CTLSMemoryPool<CSerializationBuf>		*pMemoryPool;
 private:
 	void Initialize(int BufferSize);
 

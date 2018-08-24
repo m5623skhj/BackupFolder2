@@ -2,7 +2,7 @@
 #include "LanServerSerializeBuf.h"
 #include "CommonSource/LockFreeMemoryPool.h"
 
-CLockFreeMemoryPool<CSerializationBuf>* CSerializationBuf::pMemoryPool = new CLockFreeMemoryPool<CSerializationBuf>(0, false);
+CTLSMemoryPool<CSerializationBuf>* CSerializationBuf::pMemoryPool = new CTLSMemoryPool<CSerializationBuf>(NUM_OF_CHUNK, false);
 
 
 struct st_Exception
@@ -236,7 +236,7 @@ void CSerializationBuf::WritePtrSetLast()
 
 CSerializationBuf* CSerializationBuf::Alloc()
 {
-	return CSerializationBuf::pMemoryPool->Pop();
+	return CSerializationBuf::pMemoryPool->ChunkAlloc();
 }
 
 void CSerializationBuf::AddRefCount(CSerializationBuf* AddRefBuf)
@@ -250,7 +250,7 @@ void CSerializationBuf::Free(CSerializationBuf* DeleteBuf)
 	if (RefCnt == 0)
 	{
 		DeleteBuf->Init();
-		CSerializationBuf::pMemoryPool->Push(DeleteBuf);
+		CSerializationBuf::pMemoryPool->ChunkFree(DeleteBuf);
 	}
 }
 
