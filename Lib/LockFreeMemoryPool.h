@@ -91,7 +91,9 @@ template <typename Data>
 Data *CLockFreeMemoryPool<Data>::Pop()
 {
 	__declspec(align(16)) st_BLOCK_INFO CurTop, NewTop;
-	InterlockedIncrement((UINT*)&m_iUseCount);
+	// 디버깅용 코드
+	// 실제 사용시 제거할 것
+	//InterlockedIncrement((UINT*)&m_iUseCount);
 
 	if (!m_bIsPlacementNew)
 	{
@@ -107,7 +109,9 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 				//InterlockedCompareExchange128((LONG64*)&m_Top, 1, -1, (LONG64*)&CurTop);
 				if (CurTop.pBlockPtr == nullptr)
 				{
-					InterlockedIncrement((UINT*)&m_iAllocCount);
+					// 디버깅용 코드
+					// 실제 사용시 제거할 것
+					//InterlockedIncrement((UINT*)&m_iAllocCount);
 					CurTop.pBlockPtr = new st_BLOCK_NODE();
 					break;
 				}
@@ -121,7 +125,9 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 		}
 		else
 		{
-			InterlockedIncrement((UINT*)&m_iAllocCount);
+			// 디버깅용 코드
+			// 실제 사용시 제거할 것
+			//InterlockedIncrement((UINT*)&m_iAllocCount);
 			CurTop.pBlockPtr = new st_BLOCK_NODE();
 		}
 	}
@@ -139,7 +145,9 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 				//InterlockedCompareExchange128((LONG64*)&m_Top, 1, -1, (LONG64*)&CurTop);
 				if (CurTop.pBlockPtr == nullptr)
 				{
-					InterlockedIncrement((UINT*)&m_iAllocCount);
+					// 디버깅용 코드
+					// 실제 사용시 제거할 것
+					//InterlockedIncrement((UINT*)&m_iAllocCount);
 					CurTop.pBlockPtr = (st_BLOCK_NODE*)malloc(sizeof(st_BLOCK_NODE));
 					break;
 				}
@@ -151,7 +159,9 @@ Data *CLockFreeMemoryPool<Data>::Pop()
 		}
 		else
 		{
-			InterlockedIncrement((UINT*)&m_iAllocCount);
+			// 디버깅용 코드
+			// 실제 사용시 제거할 것
+			//InterlockedIncrement((UINT*)&m_iAllocCount);
 			CurTop.pBlockPtr = (st_BLOCK_NODE*)malloc(sizeof(st_BLOCK_NODE));
 		}
 		new (CurTop.pBlockPtr) st_BLOCK_NODE();
@@ -173,20 +183,23 @@ void CLockFreeMemoryPool<Data>::Push(Data *pData)
 	//st_BLOCK_NODE *pCurTop;
 	do {
 		pCurTop = m_Top.pBlockPtr;
-		//CurTop.pBlockPtr = m_Top.pBlockPtr;
 		PushPtr->stpNextBlock = pCurTop;
+		//CurTop.pBlockPtr = m_Top.pBlockPtr;
 		//NewTop.pBlockPtr->stpNextBlock = CurTop.pBlockPtr;
 
 		//pCurTop = m_Top.pBlockPtr;
 		//PushPtr->stpNextBlock = pCurTop;
 		//PushPtr->stpNextBlock = m_Top.pBlockPtr;
-	} /*while (!InterlockedCompareExchange128(
+	} 
+	/*while (!InterlockedCompareExchange128(
 		(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pBlockPtr, (LONG64*)&CurTop));*/
 	while (InterlockedCompareExchange64(
 		//(volatile LONG64*)&m_Top.pBlockPtr, (LONG64)PushPtr, (LONG64)pCurTop) != (LONG64)pCurTop);
 		(LONG64*)&m_Top.pBlockPtr, (LONG64)PushPtr, (LONG64)pCurTop) != (LONG64)pCurTop);
 
-	InterlockedDecrement((UINT*)&m_iUseCount);
+	// 디버깅용 코드
+	// 실제 사용시 제거할 것
+	//InterlockedDecrement((UINT*)&m_iUseCount);
 
 	if (m_bIsPlacementNew)
 		PushPtr->NodeData.~Data();
@@ -231,6 +244,7 @@ private:
 		CChunk();
 		~CChunk();
 
+		// 아래는 CTLSMemroyPool 을 friend 로 처리하여 직접 접근 시키는것으로 변경함
 		// 마지막 노드가 할당 받았다면 OutNode 에 false 를 넣어
 		// Chunk 가 비었다는 것을 알림
 		//T* NodeAlloc(bool *pOutNodeCanAllocMore);
@@ -309,7 +323,6 @@ Data* CTLSMemoryPool<Data>::Alloc()
 	// 실제 사용시 제거할 것
 	//InterlockedIncrement(&m_uiUseNodeCount);
 	
-
 	return pData;
 }
 
@@ -322,12 +335,8 @@ void CTLSMemoryPool<Data>::Free(Data *pData)
 	//CChunk<Data> *pChunk = ((CChunk<Data>*)*((LONG64*)(pData + 1)));
 	CChunk<Data> *pChunk = ((typename CChunk<Data>::st_CHUNK_NODE*)pData)->pAssginedChunk;
 	UINT retval = InterlockedIncrement(&pChunk->m_uiNodeFreeCount);
-	if (retval > df_CHUNK_ELEMENT_SIZE)
-		printf("A");
 	if (retval >= df_CHUNK_ELEMENT_SIZE)
 	{
-		//pChunk->m_uiChunkIndex = 0;
-		//pChunk->m_uiNodeFreeCount = 0;
 		m_pChunkMemoryPool->Push(pChunk);
 	}
 
@@ -341,8 +350,7 @@ void CTLSMemoryPool<Data>::Free(Data *pData)
 ///////////////////////////////
 template <typename Data>
 template <typename T>
-CTLSMemoryPool<Data>::CChunk<T>::CChunk() //:
-	//m_uiChunkIndex(0), m_uiNodeFreeCount(0)
+CTLSMemoryPool<Data>::CChunk<T>::CChunk()
 {
 	for (int i = 0; i < df_CHUNK_ELEMENT_SIZE; ++i)
 		m_ChunkData[i].pAssginedChunk = this;
@@ -367,7 +375,6 @@ CTLSMemoryPool<Data>::CChunk<T>::~CChunk()
 //
 //	return &m_ChunkData[m_uiChunkIndex - 1].Data;
 //}
-
 //template <typename Data>
 //template <typename T>
 //bool CTLSMemoryPool<Data>::CChunk<T>::NodeFree()

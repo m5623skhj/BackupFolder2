@@ -25,7 +25,7 @@ void CEcho::OnClientJoin(UINT64 OutClientID)
 
 	//m_UserMap.insert({OutClientID, 0});
 	CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
-	InterlockedIncrement(&g_ULLConuntOfNew);
+	//InterlockedIncrement(&g_ULLConuntOfNew);
 	WORD StackIndex = (WORD)(OutClientID >> SESSION_INDEX_SHIFT);
 
 	*SendBuf << Payload;
@@ -71,7 +71,7 @@ void CEcho::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *ServerReceivedBu
 	CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
 
 	WORD StackIndex = (WORD)(ReceivedSessionID >> SESSION_INDEX_SHIFT);
-	InterlockedIncrement(&g_ULLConuntOfNew);
+	//InterlockedIncrement(&g_ULLConuntOfNew);
 	*SendBuf << echo;
 
 	SendBuf->AddRefCount(SendBuf);

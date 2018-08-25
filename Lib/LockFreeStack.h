@@ -70,23 +70,27 @@ void CLockFreeStack<Data>::Push(Data InputData)
 		//NewTop.pTopNodePtr->pNext = CurTop.pTopNodePtr;
 		////NewTop.ullBlockID = CurTop.ullBlockID + 1;
 		//NewTop.pTopNodePtr->ItemData = InputData;
-
 		//pCurTop = m_Top.pTopNodePtr;
 		//pNewTop->pNext = pCurTop;
 		//pNewTop->ItemData = InputData;
-	} /*while (!InterlockedCompareExchange128(
+	} 
+	/*while (!InterlockedCompareExchange128(
 		(LONG64*)&m_Top, (LONG64)NewTop.ullBlockID, (LONG64)NewTop.pTopNodePtr, (LONG64*)&CurTop));*/
 	while (InterlockedCompareExchange64(
 		(LONG64*)&m_Top.pTopNodePtr, (LONG64)pNewTop, (LONG64)pCurTop) != (LONG64)pCurTop);
 
-	InterlockedIncrement(&m_iRestStackSize);
+	// 디버깅용 코드
+	// 실제 사용시 제거할 것
+	//InterlockedIncrement(&m_iRestStackSize);
 }
 
 template <typename Data>
 bool CLockFreeStack<Data>::Pop(Data *pOutData)
 {
 	st_TOP_INFO NewTop, CurTop;
-	InterlockedDecrement(&m_iRestStackSize);
+	// 디버깅용 코드
+	// 실제 사용시 제거할 것
+	//InterlockedDecrement(&m_iRestStackSize);
 
 	do {
 		//CurTop = m_Top;

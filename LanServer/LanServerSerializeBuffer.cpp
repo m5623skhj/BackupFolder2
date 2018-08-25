@@ -236,7 +236,7 @@ void CSerializationBuf::WritePtrSetLast()
 
 CSerializationBuf* CSerializationBuf::Alloc()
 {
-	return CSerializationBuf::pMemoryPool->ChunkAlloc();
+	return CSerializationBuf::pMemoryPool->Alloc();
 }
 
 void CSerializationBuf::AddRefCount(CSerializationBuf* AddRefBuf)
@@ -249,8 +249,14 @@ void CSerializationBuf::Free(CSerializationBuf* DeleteBuf)
 	UINT RefCnt = InterlockedDecrement(&DeleteBuf->m_iRefCount);
 	if (RefCnt == 0)
 	{
-		DeleteBuf->Init();
-		CSerializationBuf::pMemoryPool->ChunkFree(DeleteBuf);
+		//DeleteBuf->Init();
+		DeleteBuf->m_byError = 0;
+		DeleteBuf->m_iWrite = HEADER_SIZE;
+		DeleteBuf->m_iRead = 0;
+		DeleteBuf->m_iWriteLast = 0;
+		DeleteBuf->m_iUserWriteBefore = HEADER_SIZE;
+		DeleteBuf->m_iRefCount = 1;
+		CSerializationBuf::pMemoryPool->Free(DeleteBuf);
 	}
 }
 
@@ -266,7 +272,8 @@ CSerializationBuf &CSerializationBuf::operator<<(int Input)
 
 CSerializationBuf &CSerializationBuf::operator<<(WORD Input)
 {
-	WriteBuffer((char*)&Input, sizeof(Input));
+	*((short*)(&m_pSerializeBuffer[m_iWrite])) = *(short*)&Input;
+	m_iWrite += sizeof(WORD);
 	return *this;
 }
 
@@ -284,7 +291,8 @@ CSerializationBuf &CSerializationBuf::operator<<(UINT Input)
 
 CSerializationBuf &CSerializationBuf::operator<<(UINT64 Input)
 {
-	WriteBuffer((char*)&Input, sizeof(Input));
+	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&Input;
+	m_iWrite += sizeof(UINT64);
 	return *this;
 }
 
@@ -308,7 +316,8 @@ CSerializationBuf &CSerializationBuf::operator<<(float Input)
 
 CSerializationBuf &CSerializationBuf::operator<<(__int64 Input)
 {
-	WriteBuffer((char*)&Input, sizeof(Input));
+	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&Input;
+	m_iWrite += sizeof(__int64);
 	return *this;
 }
 
@@ -324,7 +333,8 @@ CSerializationBuf &CSerializationBuf::operator>>(int &Input)
 
 CSerializationBuf &CSerializationBuf::operator>>(WORD &Input)
 {
-	ReadBuffer((char*)&Input, sizeof(Input));
+	*((short*)(&Input)) = *(short*)&m_pSerializeBuffer[m_iRead];
+	m_iRead += sizeof(WORD);
 	return *this;
 }
 
@@ -360,12 +370,14 @@ CSerializationBuf &CSerializationBuf::operator>>(UINT &Input)
 
 CSerializationBuf &CSerializationBuf::operator>>(UINT64 &Input)
 {
-	ReadBuffer((char*)&Input, sizeof(Input));
+	*((long long*)(&Input)) = *(long long*)&m_pSerializeBuffer[m_iRead];
+	m_iRead += sizeof(UINT64);
 	return *this;
 }
 
 CSerializationBuf &CSerializationBuf::operator>>(__int64 &Input)
 {
-	ReadBuffer((char*)&Input, sizeof(Input));
+	*((long long*)(&Input)) = *(long long*)&m_pSerializeBuffer[m_iRead];
+	m_iRead += sizeof(__int64);
 	return *this;
 }

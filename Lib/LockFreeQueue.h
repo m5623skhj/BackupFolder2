@@ -233,10 +233,10 @@ void CLockFreeQueue<Data>::Enqueue(Data InputData)
 			// 이전에 미는것을 실패했음
 			// 따라서 m_Tail 을 한 칸 밀어줌
 			// 실패했다면, 누군가가 이미 밀어 준 것이므로 상관하지 않음
-			if (InterlockedCompareExchange128((LONG64*)&m_Tail, (LONG64)CurTail.ullBlockID, (LONG64)CurTail.pNode->pNext, (LONG64*)&CurTail))
-			{
+			InterlockedCompareExchange128((LONG64*)&m_Tail, (LONG64)CurTail.ullBlockID, (LONG64)CurTail.pNode->pNext, (LONG64*)&CurTail);
+			//if (InterlockedCompareExchange128((LONG64*)&m_Tail, (LONG64)CurTail.ullBlockID, (LONG64)CurTail.pNode->pNext, (LONG64*)&CurTail))
+			//{
 				//InterlockedIncrement(&m_uiRestSize);
-
 				//////////////////////////////////////////////////
 				//if (NewTail.pNode->CallCount == 1000)
 				//	NewTail.pNode->CallCount = 0;
@@ -247,9 +247,10 @@ void CLockFreeQueue<Data>::Enqueue(Data InputData)
 				//NewTail.pNode->NodeChaser[NewTail.pNode->CallCount].CurHead = (LONG64)m_Head.pNode;
 				//NewTail.pNode->NodeChaser[NewTail.pNode->CallCount].CurTail = (LONG64)m_Tail.pNode;
 				//////////////////////////////////////////////////
-			}
+			//}
 		}
 	}
+
 
 	InterlockedIncrement(&m_uiRestSize);
 }
@@ -257,8 +258,8 @@ void CLockFreeQueue<Data>::Enqueue(Data InputData)
 template <typename Data>
 bool CLockFreeQueue<Data>::Dequeue(Data *pOutData)
 {
-	if (m_uiRestSize == 0)
-		return false;
+	//if (m_uiRestSize == 0)
+	//	return false;
 	__declspec(align(16)) st_Q_NODE_BLOCK CurHead, CurTail, NewHead;
 
 	while (1)
@@ -296,7 +297,6 @@ bool CLockFreeQueue<Data>::Dequeue(Data *pOutData)
 			continue;
 			//dump.Crash();
 		//return false;
-
 		/////////////////////////////////////////////////////
 		//if (NewHead.pNode->CallCount == 1000)
 		//	NewHead.pNode->CallCount = 0;
