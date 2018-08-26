@@ -515,7 +515,9 @@ bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 
 	//InterlockedIncrement(&m_pSessionArray[StackIndex].New);
 	WORD HeaderSize = 8;
-	pSerializeBuf->WritePtrSetHeader();
+	//pSerializeBuf->WritePtrSetHeader();
+	pSerializeBuf->m_iWriteLast = pSerializeBuf->m_iWrite;
+	pSerializeBuf->m_iWrite = 0;
 	*pSerializeBuf << HeaderSize;
 
 	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSerializeBuf);
