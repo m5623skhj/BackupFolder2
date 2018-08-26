@@ -153,9 +153,9 @@ bool CLanServer::ReleaseSession(Session *pSession)
 	// 큐에서 아직 꺼내오지 못한 직렬화 버퍼가 있다면 해당 직렬화 버퍼들을 반환함
 	if (Rest > 0)
 	{
+		CSerializationBuf *DeleteBuf;
 		for (int i = 0; i < Rest; ++i)
 		{
-			CSerializationBuf *DeleteBuf;
 			pSession->SendIOData.SendQ.Dequeue(&DeleteBuf);
 			CSerializationBuf::Free(DeleteBuf);
 		}
@@ -366,9 +366,12 @@ UINT CLanServer::Worker()
 					pSession->RecvIOData.RingBuffer.RemoveData(sizeof(WORD));
 
 					CSerializationBuf RecvSerializeBuf;
-					RecvSerializeBuf.SetWriteZero();
-					retval = pSession->RecvIOData.RingBuffer.Dequeue(RecvSerializeBuf.GetWriteBufferPtr(), Header);
-					RecvSerializeBuf.MoveWritePos(retval);
+					//RecvSerializeBuf.SetWriteZero();
+					RecvSerializeBuf.m_iWrite = 0;
+					//retval = pSession->RecvIOData.RingBuffer.Dequeue(RecvSerializeBuf.GetWriteBufferPtr(), Header);
+					retval = pSession->RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], Header);
+					//RecvSerializeBuf.MoveWritePos(retval);
+					RecvSerializeBuf.m_iWrite += retval;
 					RingBufferRestSize -= (retval + sizeof(WORD));
 					OnRecv(pSession->SessionID, &RecvSerializeBuf);
 				}

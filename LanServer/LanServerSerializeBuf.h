@@ -31,6 +31,8 @@ private:
 	char		*m_pSerializeBuffer;
 	//static CLockFreeMemoryPool<CSerializationBuf>	*pMemoryPool;
 	static CTLSMemoryPool<CSerializationBuf>		*pMemoryPool;
+
+	friend CLanServer;
 private:
 	void Initialize(int BufferSize);
 
@@ -90,7 +92,6 @@ public:
 	static void				  AddRefCount(CSerializationBuf* AddRefBuf);
 	static void				  Free(CSerializationBuf* DeleteBuf);
 
-	friend CLanServer;
 
 	CSerializationBuf& operator<<(int Input);
 	CSerializationBuf& operator<<(WORD Input);
