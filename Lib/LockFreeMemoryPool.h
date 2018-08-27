@@ -266,6 +266,7 @@ public:
 
 	Data *Alloc();
 	void Free(Data *pData);
+	void ChunkFreeForcibly();
 
 	int GetUseChunkCount()   { return m_pChunkMemoryPool->GetUseCount(); }
 	int GetAllocChunkCount() { return m_pChunkMemoryPool->GetAllocCount(); }
@@ -283,7 +284,8 @@ CTLSMemoryPool<Data>::CTLSMemoryPool(UINT MakeChunkInInit, bool bIsPlacementNew)
 	m_iTLSIndex = TlsAlloc();
 	if (m_iTLSIndex == TLS_OUT_OF_INDEXES)
 	{
-		printf("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+		printf("TLS_OUT_OF_INDEXES ERROR\n\n");
+		throw;
 		//dump.Crash();
 	}
 	m_pChunkMemoryPool = new CLockFreeMemoryPool<CChunk<Data> >(MakeChunkInInit, bIsPlacementNew);
@@ -302,7 +304,7 @@ Data* CTLSMemoryPool<Data>::Alloc()
 	CChunk<Data> *TLSChunkPtr = (CChunk<Data>*)TlsGetValue(m_iTLSIndex);
 	
 	if (GetLastError() != NO_ERROR)
-		printf("BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
+		return NULL;
 		//dump.Crash();
 
 	if (TLSChunkPtr == NULL)
@@ -343,6 +345,22 @@ void CTLSMemoryPool<Data>::Free(Data *pData)
 	// 디버깅용 코드
 	// 실제 사용시 제거할 것
 	//InterlockedDecrement(&m_uiUseNodeCount);
+}
+
+template <typename Data>
+void CTLSMemoryPool<Data>::ChunkFreeForcibly()
+{
+	CChunk<Data> *TLSChunkPtr = (CChunk<Data>*)TlsGetValue(m_iTLSIndex);
+	if (TLSChunkPtr == NULL)
+		return;
+
+	while (1)
+	{
+		Data *pData = &TLSChunkPtr->m_ChunkData[TLSChunkPtr->m_uiChunkIndex].Data;
+		Free(pData);
+		if (TLSChunkPtr->m_uiNodeFreeCount >= df_CHUNK_ELEMENT_SIZE)
+			return;
+	}
 }
 
 ///////////////////////////////

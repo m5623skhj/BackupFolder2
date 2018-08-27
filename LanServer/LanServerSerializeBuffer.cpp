@@ -260,6 +260,11 @@ void CSerializationBuf::Free(CSerializationBuf* DeleteBuf)
 	}
 }
 
+void CSerializationBuf::ChunkFreeForcibly()
+{
+	CSerializationBuf::pMemoryPool->ChunkFreeForcibly();
+}
+
 //////////////////////////////////////////////////////////////////
 // Operator <<
 //////////////////////////////////////////////////////////////////

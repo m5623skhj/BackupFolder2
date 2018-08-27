@@ -90,14 +90,14 @@ private:
 
 	struct Session
 	{
-		BOOL				IsUseSession;
-		SOCKET				sock;
-		UINT				IOCount;
-		UINT64				SessionID;
-		OVERLAPPEDIODATA	RecvIOData;
+		BOOL						IsUseSession;
+		SOCKET						sock;
+		UINT						IOCount;
+		UINT64						SessionID;
+		OVERLAPPEDIODATA			RecvIOData;
 		OVERLAPPED_SEND_IO_DATA		SendIOData;
 
-		CSerializationBuf*	pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
+		CSerializationBuf*			pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
 
 		///////////////////////////////////////////
 		//LONG				New;

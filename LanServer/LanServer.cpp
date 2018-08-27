@@ -216,7 +216,7 @@ UINT CLanServer::Accepter()
 		if (clientsock == INVALID_SOCKET)
 		{
 			int Err = WSAGetLastError();
-			if (Err == WSAEWOULDBLOCK)
+			if (Err == WSAEWOULDBLOCK) // ?
 			{
 				continue;
 			}
@@ -293,6 +293,7 @@ UINT CLanServer::Accepter()
 			ReleaseSession(&m_pSessionArray[SessionIdx]);
 	}
 
+	CSerializationBuf::ChunkFreeForcibly();
 	return 0;
 }
 
@@ -419,6 +420,7 @@ UINT CLanServer::Worker()
 			ReleaseSession(pSession);
 	}
 
+	CSerializationBuf::ChunkFreeForcibly();
 	return 0;
 }
 

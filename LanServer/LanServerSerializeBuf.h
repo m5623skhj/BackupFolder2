@@ -58,6 +58,8 @@ private:
 	// 원하는 길이만큼 읽기 위치에서 삭제
 	void RemoveData(int Size); 
 
+	static void ChunkFreeForcibly();
+
 	int GetAllUseSize();
 public:
 	CSerializationBuf();
