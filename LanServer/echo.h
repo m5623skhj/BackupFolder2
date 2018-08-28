@@ -36,7 +36,7 @@ public :
 	// 1000 번 이후로 상속받은 클래스에서 사용자 정의하여 사용 할 수 있음
 	// 단, GetLastError() 의 반환값이 10054 번일 경우는 이를 실행하지 않음
 	virtual void OnError(st_Error *OutError);
-	
+
 	CEcho(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient);
 	virtual ~CEcho();
 

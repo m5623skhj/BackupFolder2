@@ -266,6 +266,9 @@ public:
 
 	Data *Alloc();
 	void Free(Data *pData);
+	// 현재 TLS 에 올라와있는 청크의 포인터를 
+	// 강제로 m_pChunkMemroyPool 에 꽂아넣음
+	// 서버 종료 할 때만 사용 할 것
 	void ChunkFreeForcibly();
 
 	int GetUseChunkCount()   { return m_pChunkMemoryPool->GetUseCount(); }
@@ -303,22 +306,27 @@ Data* CTLSMemoryPool<Data>::Alloc()
 {
 	CChunk<Data> *TLSChunkPtr = (CChunk<Data>*)TlsGetValue(m_iTLSIndex);
 	
-	if (GetLastError() != NO_ERROR)
-		return NULL;
+	//if (GetLastError() != NO_ERROR)
+	//	return NULL;
 		//dump.Crash();
 
+	// TLS 에 Chunk 가 등록 되어있지 않을경우
 	if (TLSChunkPtr == NULL)
 	{
+		// Chunk MemoryPool 에서 새 청크를 할당 받고
+		// 해당 Chunk를 초기화 함
 		TLSChunkPtr = m_pChunkMemoryPool->Pop();
 		TLSChunkPtr->m_uiChunkIndex = 0;
 		TLSChunkPtr->m_uiNodeFreeCount = 0;
 
+		// 해당 Chunk 를 TLS 에 등록시킴
 		TlsSetValue(m_iTLSIndex, TLSChunkPtr);
 	}
+	UINT &chunkIndex = TLSChunkPtr->m_uiChunkIndex;
 
-	Data *pData = &TLSChunkPtr->m_ChunkData[TLSChunkPtr->m_uiChunkIndex].Data;
-	++TLSChunkPtr->m_uiChunkIndex;
-	if (TLSChunkPtr->m_uiChunkIndex >= df_CHUNK_ELEMENT_SIZE)
+	Data *pData = &TLSChunkPtr->m_ChunkData[chunkIndex].Data;
+	++chunkIndex;
+	if (chunkIndex >= df_CHUNK_ELEMENT_SIZE)
 		TlsSetValue(m_iTLSIndex, NULL);
 
 	// 디버깅용 코드
@@ -336,8 +344,8 @@ void CTLSMemoryPool<Data>::Free(Data *pData)
 	// 기본 자료형으로 캐스팅 후 다시 캐스팅하여 포인터로 변환시킴
 	//CChunk<Data> *pChunk = ((CChunk<Data>*)*((LONG64*)(pData + 1)));
 	CChunk<Data> *pChunk = ((typename CChunk<Data>::st_CHUNK_NODE*)pData)->pAssginedChunk;
-	UINT retval = InterlockedIncrement(&pChunk->m_uiNodeFreeCount);
-	if (retval >= df_CHUNK_ELEMENT_SIZE)
+	//UINT retval = InterlockedIncrement(&pChunk->m_uiNodeFreeCount);
+	if (InterlockedIncrement(&pChunk->m_uiNodeFreeCount) >= df_CHUNK_ELEMENT_SIZE)
 	{
 		m_pChunkMemoryPool->Push(pChunk);
 	}
@@ -354,13 +362,7 @@ void CTLSMemoryPool<Data>::ChunkFreeForcibly()
 	if (TLSChunkPtr == NULL)
 		return;
 
-	while (1)
-	{
-		Data *pData = &TLSChunkPtr->m_ChunkData[TLSChunkPtr->m_uiChunkIndex].Data;
-		Free(pData);
-		if (TLSChunkPtr->m_uiNodeFreeCount >= df_CHUNK_ELEMENT_SIZE)
-			return;
-	}
+	m_pChunkMemoryPool->Push(TLSChunkPtr);
 }
 
 ///////////////////////////////

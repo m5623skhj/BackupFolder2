@@ -19,7 +19,7 @@ void CRingbuffer::Initialize(int BufferSize)
 	m_pBuffer = new char[BufferSize];
 }
 
-void CRingbuffer::Initialize()
+void CRingbuffer::InitPointer()
 {
 	m_iFront = 0;
 	m_iRear = 0;
@@ -366,6 +366,60 @@ int CRingbuffer::LockEnqueue(char *pData, int Size)
 			m_iFront = r;
 			ReleaseSRWLockExclusive(&m_SRWLock);
 			return RestSize + r;
+		}
+	}
+}
+
+int CRingbuffer::LockDequeue(char *pDest, int Size)
+{
+	//int UseSize = GetNotBrokenGetSize();
+	// GetNotBrokenGetSize를 직접 여기에서 씀
+	int UseSize;
+	AcquireSRWLockExclusive(&m_SRWLock);
+	int curR = m_iRear;
+	int curF = m_iFront;
+
+	if (curF >= curR)
+	{
+		UseSize = curF - curR;
+	}
+	else
+	{
+		UseSize = m_iSize - curR;
+	}
+
+	char *Rearptr = &m_pBuffer[curR];
+	if (UseSize > Size)
+		UseSize = Size;
+
+	if (curR + UseSize < m_iSize)
+	{
+		memcpy_s(pDest, UseSize, Rearptr, UseSize);
+		m_iRear += UseSize;
+		ReleaseSRWLockExclusive(&m_SRWLock);
+		return UseSize;
+	}
+	else
+	{
+		memcpy_s(pDest, UseSize, Rearptr, UseSize);
+		Rearptr = m_pBuffer;
+
+		int rest = Size - UseSize;
+		int f = curF;
+
+		if (f > rest)
+		{
+			memcpy_s(pDest + UseSize, rest, Rearptr, rest);
+			m_iRear = rest;
+			ReleaseSRWLockExclusive(&m_SRWLock);
+			return Size;
+		}
+		else
+		{
+			memcpy_s(pDest + UseSize, f, Rearptr, f);
+			m_iRear = f;
+			ReleaseSRWLockExclusive(&m_SRWLock);
+			return UseSize + f;
 		}
 	}
 }

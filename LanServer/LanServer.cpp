@@ -5,6 +5,7 @@
 #include <WS2tcpip.h>
 #include "CrashDump.h"
 #include "LanServerSerializeBuf.h"
+#include "Profiler.h"
 
 //CCrashDump dump;
 CCrashDump dump;
@@ -117,6 +118,14 @@ void CLanServer::Stop()
 {
 	closesocket(m_ListenSock);
 	WaitForSingleObject(m_hAcceptThread, INFINITE);
+	for (UINT i = 0; i < m_uiMaxClient; ++i)
+	{
+		if (m_pSessionArray[i].IsUseSession)
+		{
+			shutdown(m_pSessionArray[i].sock, SD_BOTH);
+		}
+	}
+
 	PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, NULL);
 	WaitForMultipleObjects(m_byNumOfWorkerThread, m_pWorkerThreadHandle, TRUE, INFINITE);
 
@@ -144,11 +153,18 @@ bool CLanServer::ReleaseSession(Session *pSession)
 	//pSession->Del += StoreNumber;
 	//InterlockedAdd(&g_ULLConuntOfDel, Rest);
 
+	if (InterlockedCompareExchange64((LONG64*)&pSession->IOCount, 0, df_RELEASE_VALUE) != df_RELEASE_VALUE)
+		return false;
+
 	int SendBufferRestSize = pSession->SendIOData.lBufferCount;
 	int Rest = pSession->SendIOData.SendQ.GetRestSize();
 	// SendPost 에서 옮겨졌으나 보내지 못한 직렬화 버퍼들을 반환함
 	for (int i = 0; i < SendBufferRestSize; ++i)
+	{
+		Begin("Free");
 		CSerializationBuf::Free(pSession->pSeirializeBufStore[i]);
+		End("Free");
+	}
 
 	// 큐에서 아직 꺼내오지 못한 직렬화 버퍼가 있다면 해당 직렬화 버퍼들을 반환함
 	if (Rest > 0)
@@ -157,7 +173,9 @@ bool CLanServer::ReleaseSession(Session *pSession)
 		for (int i = 0; i < Rest; ++i)
 		{
 			pSession->SendIOData.SendQ.Dequeue(&DeleteBuf);
+			Begin("Free");
 			CSerializationBuf::Free(DeleteBuf);
+			End("Free");
 		}
 		//pSession->Del += Rest;
 	}
@@ -188,15 +206,33 @@ bool CLanServer::DisConnect(UINT64 SessionID)
 {
 	WORD StackIndex = (WORD)(SessionID >> SESSION_INDEX_SHIFT);
 
+	if (InterlockedIncrement(&m_pSessionArray[StackIndex].IOCount) == 1)
+	{
+		InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount);
+		if(m_pSessionArray[StackIndex].IsUseSession == FALSE)
+			ReleaseSession(&m_pSessionArray[StackIndex]);
+		return false;
+	}
+
 	if (m_pSessionArray[StackIndex].IsUseSession == FALSE)
 	{
+		// 이후 컨텐츠가 들어간다면 발생할 가능성이 존재함
+		//////////////////////////////////////////////////////
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
 		Error.LanServerErr = LANSERVER_ERR::SESSION_NULL_ERR;
 		OnError(&Error);
 		return false;
+		//////////////////////////////////////////////////////
 	}
+	
 	shutdown(m_pSessionArray[StackIndex].sock, SD_BOTH);
+	
+	if (InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount) == 0)
+	{
+		ReleaseSession(&m_pSessionArray[StackIndex]);
+		return false;
+	}
 
 	return true;
 }
@@ -392,7 +428,9 @@ UINT CLanServer::Worker()
 				int BufferCount = pSession->SendIOData.lBufferCount;
 				for (int i = 0; i < BufferCount; ++i)
 				{
+					Begin("Free");
 					CSerializationBuf::Free(pSession->pSeirializeBufStore[i]);
+					End("Free");
 
 					////////////////////////////////////////
 					//pSession->pSeirializeBufStore[i] = NULL;
@@ -490,28 +528,53 @@ char CLanServer::RecvPost(Session *pSession)
 
 bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 {
-
 	WORD StackIndex = (WORD)(SessionID >> SESSION_INDEX_SHIFT);
+
 	if (pSerializeBuf == NULL)
 	{
-		ReleaseSession(&m_pSessionArray[StackIndex]);
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
 		Error.LanServerErr = LANSERVER_ERR::SERIALIZEBUF_NULL_ERR;
 		OnError(&Error);
 		return false;
 	}
+	
+	if (m_pSessionArray[StackIndex].SessionID != SessionID)
+	{
+		Begin("Free");
+		CSerializationBuf::Free(pSerializeBuf);
+		End("Free");
+
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.LanServerErr = LANSERVER_ERR::INCORRECT_SESSION;
+		OnError(&Error);
+		return false;
+	}
+
+	if (InterlockedIncrement(&m_pSessionArray[StackIndex].IOCount) == 1)
+	{
+		CSerializationBuf::Free(pSerializeBuf);
+		InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount);
+		if (m_pSessionArray[StackIndex].IsUseSession)
+			ReleaseSession(&m_pSessionArray[StackIndex]);
+
+		return false;
+	}
 
 	if (m_pSessionArray[StackIndex].IsUseSession == FALSE)
 	{
+		Begin("Free");
 		CSerializationBuf::Free(pSerializeBuf);
-		//InterlockedIncrement(&g_ULLConuntOfDel);
-		//InterlockedIncrement(&m_pSessionArray[StackIndex].Del);
+		End("Free");
 
+		// 이후 컨텐츠가 들어간다면 발생할 가능성이 존재함
+		//////////////////////////////////////////////////////
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
 		Error.LanServerErr = LANSERVER_ERR::SESSION_NULL_ERR;
 		OnError(&Error);
+		//////////////////////////////////////////////////////
 		return false;
 	}
 
@@ -524,6 +587,15 @@ bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 
 	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSerializeBuf);
 	SendPost(&m_pSessionArray[StackIndex]);
+
+	if (InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount) == 0)
+	{
+		if(m_pSessionArray[StackIndex].IsUseSession)
+			ReleaseSession(&m_pSessionArray[StackIndex]);
+
+		return false;
+	}
+
 	return true;
 }
 
@@ -603,4 +675,10 @@ UINT CLanServer::GetNumOfUser()
 UINT CLanServer::GetStackRestSize()
 {
 	return m_pSessionIndexStack->GetRestStackSize();
+}
+
+void CLanServer::UseableSession()
+{
+	
+
 }

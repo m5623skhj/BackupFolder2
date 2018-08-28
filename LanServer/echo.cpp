@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "Echo.h"
 #include "Log.h"
+#include "Profiler.h"
 #include "LanServerSerializeBuf.h"
 
 CEcho::CEcho(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient)
@@ -14,6 +15,7 @@ CEcho::~CEcho()
 {
 	_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR", L"End\n%d");
 	Stop();
+	WritingProfile();
 }
 
 void CEcho::OnClientJoin(UINT64 OutClientID)
@@ -24,7 +26,9 @@ void CEcho::OnClientJoin(UINT64 OutClientID)
 	// 삭제됨
 
 	//m_UserMap.insert({OutClientID, 0});
+	Begin("Alloc");
 	CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
+	End("Alloc");
 	//InterlockedIncrement(&g_ULLConuntOfNew);
 	WORD StackIndex = (WORD)(OutClientID >> SESSION_INDEX_SHIFT);
 
@@ -45,8 +49,6 @@ void CEcho::OnClientLeave(UINT64 LeaveClientID)
 
 bool CEcho::OnConnectionRequest()
 {
-
-
 	return true;
 }
 
@@ -68,7 +70,9 @@ void CEcho::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *ServerReceivedBu
 	// 직렬화 버퍼를 동적 할당해서 해당 포인터를
 	// SendPacket 에 넣어 놓으면 Send 가 완료 되었을 시
 	// 삭제됨
+	Begin("Alloc");
 	CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
+	End("Alloc");
 
 	WORD StackIndex = (WORD)(ReceivedSessionID >> SESSION_INDEX_SHIFT);
 	//InterlockedIncrement(&g_ULLConuntOfNew);

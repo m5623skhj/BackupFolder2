@@ -3,8 +3,8 @@
 #include <unordered_map>
 #include "Ringbuffer.h"
 //#include "Stack.h"
-#include "CommonSource/LockFreeStack.h"
-#include "CommonSource/LockFreeQueue.h"
+#include "LockFreeStack.h"
+#include "LockFreeQueue.h"
 
 // 해당 소켓이 송신중에 있는지 아닌지
 #define NONSENDING	0
@@ -17,6 +17,8 @@
 #define POST_RETVAL_COMPLETE				2
 
 #define ONE_SEND_WSABUF_MAX					200
+
+#define df_RELEASE_VALUE					0x100000000
 
 //////////////////////////////////////////////////////////////////////////////////////
 // LANSERVER_ERR
@@ -41,6 +43,7 @@ enum LANSERVER_ERR
 	SERIALIZEBUF_NULL_ERR,
 	RINGBUFFER_MAX_SIZE_ERR,
 	RINGBUFFER_MIN_SIZE_ERR,
+	INCORRECT_SESSION,
 	END_OF_ERR
 };
 
@@ -90,9 +93,9 @@ private:
 
 	struct Session
 	{
-		BOOL						IsUseSession;
-		SOCKET						sock;
 		UINT						IOCount;
+		UINT						IsUseSession;
+		SOCKET						sock;
 		UINT64						SessionID;
 		OVERLAPPEDIODATA			RecvIOData;
 		OVERLAPPED_SEND_IO_DATA		SendIOData;
@@ -151,6 +154,8 @@ public:
 
 	UINT GetNumOfUser();
 	UINT GetStackRestSize();
+
+	void UseableSession();
 
 	//LONG g_ULLConuntOfNew = 0;
 	//LONG g_ULLConuntOfDel = 0;

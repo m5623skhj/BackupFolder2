@@ -1,14 +1,19 @@
-//#include "stdafx.h"
-#include "Profiler2.h"
+#include "stdafx.h"
+#include "Profiler.h"
+#include <processthreadsapi.h>
 
 #undef Begin
 #undef End
 #undef WritingProfile
 #undef InitializeProfiler
 
+#if PROFILING == SINGLE_THREAD_PROFILING
 CProfiler g_Profiler;
+#elif PROFILING == MULTI_THREAD_PROFILING
+CProfilerManager g_ProfilerManager;
+#endif
 
-#if PROFILING == TRUE
+#if PROFILING == SINGLE_THREAD_PROFILING || PROFILING == MULTI_THREAD_PROFILING
 CProfiler::CProfiler()
 {
 	QueryPerformanceFrequency(&m_liStandard);
@@ -17,7 +22,7 @@ CProfiler::CProfiler()
 
 CProfiler::~CProfiler()
 {
-	WritingProfile();
+	//WritingProfile();
 }
 
 void CProfiler::Begin(const char* ProfileName)
@@ -55,6 +60,9 @@ void CProfiler::Begin(const char* ProfileName)
 
 void CProfiler::End(const char* ProfileName)
 {
+	LARGE_INTEGER EndTime;
+	QueryPerformanceCounter(&EndTime);
+
 	int ProfileNumber = 0;
 	// 인자로 받아온 문자열과 이전에 Begin 에서 기록한 문자열을 비교하여
 	// 어느 프로파일의 상태를 닫을지 판단함
@@ -72,14 +80,11 @@ void CProfiler::End(const char* ProfileName)
 			throw;
 		}
 	}
-
-	LARGE_INTEGER EndTime;
-	QueryPerformanceCounter(&EndTime);
-
+	
 	// 방금 얻어온 EndTime 에서 이전에 Begin 에서 얻은 StartTime 의 차를 구하여
 	// 클럭 단위의 정밀한 시간을 얻어옴
 	long long Result = EndTime.QuadPart - m_ProfileInfo[ProfileNumber].m_liStartTime.QuadPart;
-	for (int insertNumber = 0; insertNumber < df_LEAVE_VAULE; insertNumber++)
+	for (int insertNumber = 0; insertNumber < df_MAX_EXCLUDE_VAULE; insertNumber++)
 	{
 		// 이번에 얻은 결과가 이전에 기록된 insertNumber 번 째의 값 보다 작을 경우
 		// 이번에 얻은 결과값을 insertNumber 의 자리와 교체함 
@@ -148,20 +153,120 @@ void CProfiler::WritingProfile()
 	fclose(fp);
 }
 
+void CProfiler::WritingProfile(FILE *fp)
+{
+	fprintf_s(fp, " Thread : %d\n", m_iThreadID);
+	fprintf_s(fp, "                       Name  |             Average  |                 Min  |                 Max  |    Call  \n");
+	fprintf_s(fp, "-----------------------------|----------------------|----------------------|----------------------|----------\n");
+
+	for (int i = 0; i < 30; i++)
+	{
+		if (m_ProfileInfo[i].m_pName[0] == NULL)
+			break;
+		fprintf_s(fp, "%29s|%20f㎲|%20f㎲|%20f㎲|%10d\n", m_ProfileInfo[i].m_pName, (long double)m_ProfileInfo[i].m_llTimeSum / (long double)m_ProfileInfo[i].m_iNumOfCall * 1000000 / (long double)m_liStandard.QuadPart
+			, (long double)m_ProfileInfo[i].m_llMin[0] * 1000000 / (long double)m_liStandard.QuadPart, (long double)m_ProfileInfo[i].m_llMax[0] * 1000000 / (long double)m_liStandard.QuadPart
+			, m_ProfileInfo[i].m_iNumOfCall);
+	}
+
+	fprintf_s(fp, "-----------------------------|----------------------|----------------------|----------------------|----------\n\n\n\n\n\n");
+}
+
 void CProfiler::InitializeProfiler()
 {
-	for (int i = 0; i < 30; ++i)
+	for (int ProfileIdx = 0; ProfileIdx < 30; ++ProfileIdx)
 	{
-		m_ProfileInfo[i].m_pName[0] = 0;
-		m_ProfileInfo[i].m_iNumOfCall = 0;
-		for (int j = 0; j < 3; j++)
+		m_ProfileInfo[ProfileIdx].m_pName[0] = 0;
+		m_ProfileInfo[ProfileIdx].m_iNumOfCall = 0;
+		for (int LeaveValue = 0; LeaveValue < df_MAX_EXCLUDE_VAULE; ++LeaveValue)
 		{
-			m_ProfileInfo[i].m_llMin[j] = 90000000;
-			m_ProfileInfo[i].m_llMax[j] = 0;
+			m_ProfileInfo[ProfileIdx].m_llMin[LeaveValue] = 90000000;
+			m_ProfileInfo[ProfileIdx].m_llMax[LeaveValue] = 0;
 		}
-		m_ProfileInfo[i].m_llTimeSum = 0;
-		m_ProfileInfo[i].m_bIsOpen = false;
+		m_ProfileInfo[ProfileIdx].m_llTimeSum = 0;
+		m_ProfileInfo[ProfileIdx].m_bIsOpen = false;
 	}
 }
+
+
+
+///////////////////////////////////////////
+// CProfileManager Method
+///////////////////////////////////////////
+
+CProfilerManager::CProfilerManager()
+{
+	m_iThreadIndex = 0;
+	for (int ProfileIdx = 0; ProfileIdx < df_MAX_THREAD; ++ProfileIdx)
+	{
+		m_pProfiler[ProfileIdx] = new CProfiler();
+	}
+
+	m_iTLSIndex = TlsAlloc();
+}
+
+CProfilerManager::~CProfilerManager()
+{
+	for (int ProfileIdx = 0; ProfileIdx < df_MAX_THREAD; ++ProfileIdx)
+	{
+		delete m_pProfiler[ProfileIdx];
+	}
+}
+
+void CProfilerManager::Begin(const char *pProfileName)
+{
+	CProfiler *pProfiler = (CProfiler*)TlsGetValue(m_iTLSIndex);
+	if (pProfiler == NULL)
+	{
+		UINT NowIndex = InterlockedIncrement((UINT*)&m_iThreadIndex) - 1;
+		pProfiler = m_pProfiler[NowIndex];
+		pProfiler->SetThreadID(GetCurrentThreadId());
+		TlsSetValue(m_iTLSIndex, pProfiler);
+	}
+
+	pProfiler->Begin(pProfileName);
+}
+
+void CProfilerManager::End(const char *pProfileName)
+{
+	((CProfiler*)(TlsGetValue(m_iTLSIndex)))->End(pProfileName);
+}
+
+void CProfilerManager::WritingProfileAll()
+{
+	char FileName[40] = "Profiling ";
+	char TimeBuffer[30];
+	__time64_t Time;
+	tm newTime;
+	_time64(&Time);
+	localtime_s(&newTime, &Time);
+	asctime_s(TimeBuffer, (size_t)sizeof(TimeBuffer), &(const tm)newTime);
+	strcat_s(FileName, TimeBuffer);
+	FileName[df_CANCLE_RETURN] = '\0';
+	strcat_s(FileName, ".txt");
+
+	for (int iCnt = 0; iCnt < 30; iCnt++)
+	{
+		if (FileName[iCnt] == ':')
+			FileName[iCnt] = '_';
+	}
+
+	FILE *fp;
+	fopen_s(&fp, FileName, "w");
+
+	for (int i = 0; i < df_MAX_THREAD; ++i)
+		m_pProfiler[i]->WritingProfile(fp);
+
+	fclose(fp);
+	wprintf(L"Profiling Complete\n");
+}
+
+void CProfilerManager::ClearProfileAll()
+{
+	for (int i = 0; i < df_MAX_THREAD; ++i)
+		m_pProfiler[i]->InitializeProfiler();
+
+	wprintf(L"Profiling Sample Initialize Complete\n");
+}
+
 
 #endif

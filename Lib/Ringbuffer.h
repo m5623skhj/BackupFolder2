@@ -21,7 +21,7 @@ public:
 	~CRingbuffer();
 
 	// 바깥에서 rear 와 front 만 0으로 변경함
-	void Initialize();
+	void InitPointer();
 
 	// 이전 데이터를 삭제하고 새로 버퍼크기를 할당함
 	void Resize(int Size);
@@ -58,7 +58,7 @@ public:
 	// SRWLockExclusive 로 Enqueue 작업을 시행함
 	// 작업이 끝나면 Lock을 해제함
 	int LockEnqueue(char *pData, int Size);
-	//int LockDequeue(char *pDest, int Size);
+	int LockDequeue(char *pDest, int Size);
 
 	// SRWLockExclusive 로 MoveWritePos 작업을 시행함
 	// 작업이 끝나면 Lock을 해제함
