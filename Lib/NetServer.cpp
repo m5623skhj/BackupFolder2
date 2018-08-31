@@ -1,25 +1,25 @@
 #include "PreComfile.h"
 #pragma comment(lib, "ws2_32")
-#include "LanServer.h"
+#include "NetServer.h"
 #include <process.h>
+#include <WS2tcpip.h>
 #include "CrashDump.h"
-#include "LanServerSerializeBuf.h"
+#include "NetServerSerializeBuffer.h"
 #include "Profiler.h"
 
-//CCrashDump dump;
 CCrashDump dump;
 
-CLanServer::CLanServer()
+CNetServer::CNetServer()
 {
 
 }
 
-CLanServer::~CLanServer()
+CNetServer::~CNetServer()
 {
 
 }
 
-bool CLanServer::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient)
+bool CNetServer::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient)
 {
 	memcpy(m_IP, IP, sizeof(m_IP));
 	int retval;
@@ -113,7 +113,7 @@ bool CLanServer::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool 
 	return true;
 }
 
-void CLanServer::Stop()
+void CNetServer::Stop()
 {
 	closesocket(m_ListenSock);
 	WaitForSingleObject(m_hAcceptThread, INFINITE);
@@ -139,7 +139,7 @@ void CLanServer::Stop()
 	WSACleanup();
 }
 
-bool CLanServer::ReleaseSession(Session *pSession)
+bool CNetServer::ReleaseSession(Session *pSession)
 {
 	//int Rest = pSession->SendIOData.SendQ.GetRestSize();
 	//int StoreNumber = 0;
@@ -201,7 +201,7 @@ bool CLanServer::ReleaseSession(Session *pSession)
 	return true;
 }
 
-bool CLanServer::DisConnect(UINT64 SessionID)
+bool CNetServer::DisConnect(UINT64 SessionID)
 {
 	WORD StackIndex = (WORD)(SessionID >> SESSION_INDEX_SHIFT);
 
@@ -236,7 +236,7 @@ bool CLanServer::DisConnect(UINT64 SessionID)
 	return true;
 }
 
-UINT CLanServer::Accepter()
+UINT CNetServer::Accepter()
 {
 	SOCKET clientsock;
 	SOCKADDR_IN clientaddr;
@@ -332,7 +332,7 @@ UINT CLanServer::Accepter()
 	return 0;
 }
 
-UINT CLanServer::Worker()
+UINT CNetServer::Worker()
 {
 	char cPostRetval;
 	int retval;
@@ -350,36 +350,78 @@ UINT CLanServer::Worker()
 
 		GetQueuedCompletionStatus(m_hWorkerIOCP, &Transferred, (PULONG_PTR)&pSession, &lpOverlapped, INFINITE);
 		OnWorkerThreadBegin();
-		// GQCS 에 완료 통지가 왔을 경우
-		if (lpOverlapped != NULL)
+		if (lpOverlapped == NULL)
 		{
+			st_Error Error;
+			Error.GetLastErr = WSAGetLastError();
+			Error.LanServerErr = LANSERVER_ERR::OVERLAPPED_NULL_ERR;
+			OnError(&Error);
+			continue;
+		}
+		// GQCS 에 완료 통지가 왔을 경우
+		else
+		{
+			// 외부 종료코드에 의한 종료
+			if (pSession == NULL)
+			{
+				PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, NULL);
+				break;
+			}
 			// recv 파트
 			if (lpOverlapped == &pSession->RecvIOData.Overlapped)
 			{
+				// 클라이언트가 종료함
+				if (Transferred == 0)
+				{
+					// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
+					IOCount = InterlockedDecrement(&pSession->IOCount);
+					if (IOCount == 0)
+						ReleaseSession(pSession);
+
+					continue;
+				}
+
 				pSession->RecvIOData.RingBuffer.MoveWritePos(Transferred);
 				int RingBufferRestSize = pSession->RecvIOData.RingBuffer.GetUseSize();
 
-				while (RingBufferRestSize > HEADER_SIZE)
+				while (RingBufferRestSize > df_HEADER_SIZE)
 				{
-					WORD Header;
-					pSession->RecvIOData.RingBuffer.Peek((char*)&Header, HEADER_SIZE);
-					if (Header != 8)
+					CSerializationBuf RecvSerializeBuf;
+					RecvSerializeBuf.m_iWrite = 0;
+					int HeaderSize = pSession->RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, df_HEADER_SIZE);
+					// Code Size 1 + PayloadLength 2
+					RecvSerializeBuf.m_iWrite += df_HEADER_SIZE;
+
+					BYTE Code;
+					WORD PayloadLength;
+					RecvSerializeBuf >> Code >> PayloadLength;
+
+					if (Code != df_HEADER_CODE)
 					{
-						IOCount = InterlockedDecrement(&pSession->IOCount);
+						InterlockedDecrement(&pSession->IOCount);
+						st_Error Err;
+						Err.GetLastErr = 0;
+						Err.LanServerErr = HEADER_CODE_ERR;
+						OnError(&Err);
 						break;
 					}
-					else if (pSession->RecvIOData.RingBuffer.GetUseSize() < Header + HEADER_SIZE)
+					if (pSession->RecvIOData.RingBuffer.GetUseSize() < PayloadLength + df_HEADER_SIZE)
 						break;
-					pSession->RecvIOData.RingBuffer.RemoveData(HEADER_SIZE);
+					pSession->RecvIOData.RingBuffer.RemoveData(df_HEADER_SIZE);
 
-					CSerializationBuf RecvSerializeBuf;
-					//RecvSerializeBuf.SetWriteZero();
-					RecvSerializeBuf.m_iWrite = 0;
-					//retval = pSession->RecvIOData.RingBuffer.Dequeue(RecvSerializeBuf.GetWriteBufferPtr(), Header);
-					retval = pSession->RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], Header);
-					//RecvSerializeBuf.MoveWritePos(retval);
+					retval = pSession->RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
 					RecvSerializeBuf.m_iWrite += retval;
-					RingBufferRestSize -= (retval + HEADER_SIZE);
+					if (!RecvSerializeBuf.Decode())
+					{
+						InterlockedDecrement(&pSession->IOCount);
+						st_Error Err;
+						Err.GetLastErr = 0;
+						Err.LanServerErr = CHECKSUM_ERR;
+						OnError(&Err);
+						break;
+					}
+
+					RingBufferRestSize -= (retval + sizeof(WORD));
 					OnRecv(pSession->SessionID, &RecvSerializeBuf);
 				}
 
@@ -417,30 +459,6 @@ UINT CLanServer::Worker()
 				InterlockedExchange(&pSession->SendIOData.IOMode, NONSENDING); // 여기 다시 생각해 볼 것
 				cPostRetval = SendPost(pSession);
 			}
-			// 클라이언트가 종료함
-			else if (Transferred == 0)
-			{
-				// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-				IOCount = InterlockedDecrement(&pSession->IOCount);
-				if (IOCount == 0)
-					ReleaseSession(pSession);
-
-				continue;
-			}
-			// 외부 종료코드에 의한 종료
-			if (pSession == NULL)
-			{
-				PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, NULL);
-				break;
-			}
-		}
-		else
-		{
-			st_Error Error;
-			Error.GetLastErr = WSAGetLastError();
-			Error.LanServerErr = LANSERVER_ERR::OVERLAPPED_NULL_ERR;
-			OnError(&Error);
-			continue;
 		}
 
 		OnWorkerThreadEnd();
@@ -456,18 +474,18 @@ UINT CLanServer::Worker()
 	return 0;
 }
 
-UINT __stdcall CLanServer::AcceptThread(LPVOID pLanServer)
+UINT __stdcall CNetServer::AcceptThread(LPVOID pLanServer)
 {
-	return ((CLanServer*)pLanServer)->Accepter();
+	return ((CNetServer*)pLanServer)->Accepter();
 }
 
-UINT __stdcall CLanServer::WorkerThread(LPVOID pLanServer)
+UINT __stdcall CNetServer::WorkerThread(LPVOID pLanServer)
 {
-	return ((CLanServer*)pLanServer)->Worker();
+	return ((CNetServer*)pLanServer)->Worker();
 }
 
 // 해당 함수가 정상완료 및 pSession이 해제되지 않았으면 true 그 외에는 false를 반환함
-char CLanServer::RecvPost(Session *pSession)
+char CNetServer::RecvPost(Session *pSession)
 {
 	ULONGLONG IOCount;
 	if (pSession->RecvIOData.RingBuffer.IsFull())
@@ -520,7 +538,7 @@ char CLanServer::RecvPost(Session *pSession)
 	return POST_RETVAL_COMPLETE;
 }
 
-bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
+bool CNetServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 {
 	WORD StackIndex = (WORD)(SessionID >> SESSION_INDEX_SHIFT);
 
@@ -541,7 +559,7 @@ bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanServerErr = LANSERVER_ERR::INCORRECT_SESSION;
+		Error.LanServerErr = LANSERVER_ERR::INCORRECT_SESSION_ERR;
 		OnError(&Error);
 		return false;
 	}
@@ -573,11 +591,10 @@ bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 	}
 
 	//InterlockedIncrement(&m_pSessionArray[StackIndex].New);
-	WORD HeaderSize = 8;
 	//pSerializeBuf->WritePtrSetHeader();
 	pSerializeBuf->m_iWriteLast = pSerializeBuf->m_iWrite;
 	pSerializeBuf->m_iWrite = 0;
-	*pSerializeBuf << HeaderSize;
+	pSerializeBuf->Encode();
 
 	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSerializeBuf);
 	SendPost(&m_pSessionArray[StackIndex]);
@@ -594,7 +611,7 @@ bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 }
 
 // 해당 함수가 정상완료 및 pSession이 해제되지 않았으면 true 그 외에는 false를 반환함
-char CLanServer::SendPost(Session *pSession)
+char CNetServer::SendPost(Session *pSession)
 {
 	while (1)
 	{
@@ -661,12 +678,12 @@ char CLanServer::SendPost(Session *pSession)
 	return POST_RETVAL_ERR_SESSION_DELETED;
 }
 
-UINT CLanServer::GetNumOfUser()
+UINT CNetServer::GetNumOfUser()
 {
 	return m_uiNumOfUser;
 }
 
-UINT CLanServer::GetStackRestSize()
+UINT CNetServer::GetStackRestSize()
 {
 	return m_pSessionIndexStack->GetRestStackSize();
 }

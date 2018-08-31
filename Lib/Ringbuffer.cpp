@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "PreComfile.h"
 #include "Ringbuffer.h"
 
 CRingbuffer::CRingbuffer() : m_iFront(0), m_iRear(0), m_iSize(DEFAULT_BUFFERMAX)

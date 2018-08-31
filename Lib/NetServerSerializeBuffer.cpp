@@ -1,5 +1,5 @@
 #include "PreComfile.h"
-#include "LanServerSerializeBuf.h"
+#include "NetServerSerializeBuffer.h"
 #include "LockFreeMemoryPool.h"
 
 CTLSMemoryPool<CSerializationBuf>* CSerializationBuf::pMemoryPool = new CTLSMemoryPool<CSerializationBuf>(NUM_OF_CHUNK, false);
@@ -12,9 +12,9 @@ struct st_Exception
 };
 
 CSerializationBuf::CSerializationBuf() :
-	m_byError(0), m_iWrite(HEADER_SIZE), m_iRead(0), m_iWriteLast(0),
-	m_iUserWriteBefore(HEADER_SIZE), m_iRefCount(1)
-{		
+	m_byError(0), m_iWrite(df_HEADER_SIZE), m_iRead(0), m_iWriteLast(0),
+	m_iUserWriteBefore(df_HEADER_SIZE), m_iRefCount(1)
+{
 	Initialize(dfDEFAULTSIZE);
 }
 
@@ -32,10 +32,10 @@ void CSerializationBuf::Initialize(int BufferSize)
 void CSerializationBuf::Init()
 {
 	m_byError = 0;
-	m_iWrite = HEADER_SIZE;
+	m_iWrite = df_HEADER_SIZE;
 	m_iRead = 0;
 	m_iWriteLast = 0;
-	m_iUserWriteBefore = HEADER_SIZE;
+	m_iUserWriteBefore = df_HEADER_SIZE;
 	m_iRefCount = 1;
 }
 
@@ -150,7 +150,7 @@ void CSerializationBuf::RemoveData(int Size)
 
 void CSerializationBuf::MoveWritePos(int Size)
 {
-	if (m_iSize < m_iWrite + Size + HEADER_SIZE)
+	if (m_iSize < m_iWrite + Size + df_HEADER_SIZE)
 	{
 		m_byError = 2;
 		st_Exception e;
@@ -166,7 +166,7 @@ void CSerializationBuf::MoveWritePos(int Size)
 void CSerializationBuf::MoveWritePosThisPos(int ThisPos)
 {
 	m_iUserWriteBefore = m_iWrite;
-	m_iWrite = HEADER_SIZE + ThisPos;
+	m_iWrite = df_HEADER_SIZE + ThisPos;
 }
 
 void CSerializationBuf::MoveWritePosBeforeCallThisPos()
@@ -196,7 +196,7 @@ char* CSerializationBuf::GetWriteBufferPtr()
 
 int CSerializationBuf::GetUseSize()
 {
-	return m_iWrite - m_iRead - HEADER_SIZE;
+	return m_iWrite - m_iRead - df_HEADER_SIZE;
 }
 
 int CSerializationBuf::GetFreeSize()
@@ -230,6 +230,64 @@ void CSerializationBuf::WritePtrSetLast()
 	m_iWrite = m_iWriteLast;
 }
 
+// 헤더 순서
+// Code(1) Length(2) Random XOR Code(1) CheckSum(1)
+void CSerializationBuf::Encode()
+{
+	// 헤더 코드 삽입
+	int NowWrite = 0;
+	char *(&pThisBuffer) = m_pSerializeBuffer;
+	pThisBuffer[NowWrite] = df_HEADER_CODE;
+	++NowWrite;
+
+	// 페이로드 크기 삽입
+	int WirteLast = m_iWriteLast;
+	int Read = m_iRead;
+	short PayloadLength = WirteLast - df_HEADER_SIZE;
+	*((short*)(&pThisBuffer[NowWrite])) = *(short*)&PayloadLength;
+	NowWrite += 2;
+
+	// 난수 XOR 코드 생성
+	BYTE RandCode = (BYTE)(rand() & 255) ^ df_XOR_CODE;
+
+	// 체크섬 생성 및 페이로드와 체크섬 암호화
+	WORD PayloadSum = 0;
+	for (int BufIdx = df_HEADER_SIZE; BufIdx < WirteLast; ++BufIdx)
+	{
+		PayloadSum += pThisBuffer[BufIdx];
+		pThisBuffer[BufIdx] ^= RandCode;
+	}
+	BYTE CheckSum = (BYTE)(PayloadSum & 255) ^ RandCode;
+
+	// 암호화 된 랜덤코드와 체크섬 삽입
+	pThisBuffer[df_RAND_CODE_LOCATION] = RandCode;
+	pThisBuffer[df_CHECKSUM_CODE_LOCATION] = CheckSum;
+
+	m_iWrite = df_HEADER_SIZE;
+}
+
+// 헤더 순서
+// Code(1) Length(2) Random XOR Code(1) CheckSum(1)
+bool CSerializationBuf::Decode(/*char *pDecodingStartPtr*/)
+{
+	char *(&pThisBuffer) = m_pSerializeBuffer;
+	WORD PayloadSum = 0;
+	int Write = m_iWrite;
+	BYTE RandCode = pThisBuffer[df_RAND_CODE_LOCATION];
+
+	for (int BufIdx = df_HEADER_SIZE; BufIdx < Write; ++BufIdx)
+	{
+		pThisBuffer[BufIdx] ^= RandCode;
+		PayloadSum += pThisBuffer[BufIdx];
+	}
+
+	if (((BYTE)pThisBuffer[df_CHECKSUM_CODE_LOCATION] ^ RandCode) != (PayloadSum & 255))
+		return false;
+
+	m_iRead = df_HEADER_SIZE;
+	return true;
+}
+
 //////////////////////////////////////////////////////////////////
 // static
 //////////////////////////////////////////////////////////////////
@@ -251,10 +309,10 @@ void CSerializationBuf::Free(CSerializationBuf* DeleteBuf)
 	{
 		//DeleteBuf->Init();
 		DeleteBuf->m_byError = 0;
-		DeleteBuf->m_iWrite = HEADER_SIZE;
+		DeleteBuf->m_iWrite = df_HEADER_SIZE;
 		DeleteBuf->m_iRead = 0;
 		DeleteBuf->m_iWriteLast = 0;
-		DeleteBuf->m_iUserWriteBefore = HEADER_SIZE;
+		DeleteBuf->m_iUserWriteBefore = df_HEADER_SIZE;
 		DeleteBuf->m_iRefCount = 1;
 		CSerializationBuf::pMemoryPool->Free(DeleteBuf);
 	}
@@ -303,13 +361,17 @@ CSerializationBuf &CSerializationBuf::operator<<(UINT64 Input)
 
 CSerializationBuf &CSerializationBuf::operator<<(char Input)
 {
-	WriteBuffer((char*)&Input, sizeof(Input));
+	*((char*)(&m_pSerializeBuffer[m_iWrite])) = *(char*)&Input;
+	m_iWrite += sizeof(char);
+	//WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
 CSerializationBuf &CSerializationBuf::operator<<(BYTE Input)
 {
-	WriteBuffer((char*)&Input, sizeof(Input));
+	*((char*)(&m_pSerializeBuffer[m_iWrite])) = *(char*)&Input;
+	m_iWrite += sizeof(char);
+	//WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 

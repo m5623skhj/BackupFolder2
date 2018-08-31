@@ -1,9 +1,5 @@
 #include "PreComfile.h"
-#include "LanServerSerializeBuf.h"
-#include "LockFreeMemoryPool.h"
-
-CTLSMemoryPool<CSerializationBuf>* CSerializationBuf::pMemoryPool = new CTLSMemoryPool<CSerializationBuf>(NUM_OF_CHUNK, false);
-
+#include "SerializationBuffer.h"
 
 struct st_Exception
 {
@@ -11,35 +7,23 @@ struct st_Exception
 	WCHAR szErrorComment[1024];
 };
 
-CSerializationBuf::CSerializationBuf() :
-	m_byError(0), m_iWrite(HEADER_SIZE), m_iRead(0), m_iWriteLast(0),
-	m_iUserWriteBefore(HEADER_SIZE), m_iRefCount(1)
-{		
+CSerializationBuffer::CSerializationBuffer() : m_byError(0), m_iWrite(HEADER_SIZE), m_iRead(0), m_iWriteLast(0)
+{
 	Initialize(dfDEFAULTSIZE);
 }
 
-CSerializationBuf::~CSerializationBuf()
+CSerializationBuffer::~CSerializationBuffer()
 {
 	delete[] m_pSerializeBuffer;
 }
 
-void CSerializationBuf::Initialize(int BufferSize)
+void CSerializationBuffer::Initialize(int BufferSize)
 {
 	m_iSize = BufferSize;
 	m_pSerializeBuffer = new char[BufferSize];
 }
 
-void CSerializationBuf::Init()
-{
-	m_byError = 0;
-	m_iWrite = HEADER_SIZE;
-	m_iRead = 0;
-	m_iWriteLast = 0;
-	m_iUserWriteBefore = HEADER_SIZE;
-	m_iRefCount = 1;
-}
-
-void CSerializationBuf::Resize(int Size)
+void CSerializationBuffer::Resize(int Size)
 {
 	if (BUFFFER_MAX < Size)
 	{
@@ -60,7 +44,7 @@ void CSerializationBuf::Resize(int Size)
 	m_iSize = Size;
 }
 
-void CSerializationBuf::WriteBuffer(char *pData, int Size)
+void CSerializationBuffer::WriteBuffer(char *pData, int Size)
 {
 	if (BUFFFER_MAX < m_iWrite + Size)
 	{
@@ -94,7 +78,7 @@ void CSerializationBuf::WriteBuffer(char *pData, int Size)
 	m_iWrite += Size;
 }
 
-void CSerializationBuf::ReadBuffer(char *pDest, int Size)
+void CSerializationBuffer::ReadBuffer(char *pDest, int Size)
 {
 	if (m_iSize < m_iRead + Size || m_iWrite < m_iRead + Size)
 	{
@@ -128,12 +112,12 @@ void CSerializationBuf::ReadBuffer(char *pDest, int Size)
 	m_iRead += Size;
 }
 
-void CSerializationBuf::PeekBuffer(char *pDest, int Size)
+void CSerializationBuffer::PeekBuffer(char *pDest, int Size)
 {
 	memcpy_s(pDest, Size, &m_pSerializeBuffer[m_iRead], Size);
 }
 
-void CSerializationBuf::RemoveData(int Size)
+void CSerializationBuffer::RemoveData(int Size)
 {
 	if (m_iSize < m_iRead + Size || m_iWrite < m_iRead + Size)
 	{
@@ -148,9 +132,9 @@ void CSerializationBuf::RemoveData(int Size)
 	m_iRead += Size;
 }
 
-void CSerializationBuf::MoveWritePos(int Size)
+void CSerializationBuffer::MoveWritePos(int Size)
 {
-	if (m_iSize < m_iWrite + Size + HEADER_SIZE)
+	if (m_iSize < m_iWrite + Size)
 	{
 		m_byError = 2;
 		st_Exception e;
@@ -163,166 +147,133 @@ void CSerializationBuf::MoveWritePos(int Size)
 	m_iWrite += Size;
 }
 
-void CSerializationBuf::MoveWritePosThisPos(int ThisPos)
+void CSerializationBuffer::MoveWritePosThisPos(int ThisPos)
 {
-	m_iUserWriteBefore = m_iWrite;
-	m_iWrite = HEADER_SIZE + ThisPos;
+	if (ThisPos < ThisPos)
+	{
+		m_byError = 2;
+		st_Exception e;
+		wcscpy_s(e.ErrorCode, L"ErrorCode : 2");
+		wsprintf(e.szErrorComment,
+			L"%s Line %d\n\n버퍼에 쓰려고 하였으나, 버퍼 공간보다 더 큰 값이 들어왔습니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
+			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, ThisPos);
+		throw e;
+	}
+	m_iWrite = ThisPos;
 }
 
-void CSerializationBuf::MoveWritePosBeforeCallThisPos()
+void CSerializationBuffer::MoveWriteAndReadPos(int Pos)
 {
-	m_iWrite = m_iUserWriteBefore;
+	m_iRead = Pos;
+	m_iWrite = Pos;
 }
 
-BYTE CSerializationBuf::GetBufferError()
+BYTE CSerializationBuffer::GetBufferError()
 {
 	return m_byError;
 }
 
-char* CSerializationBuf::GetBufferPtr()
+char* CSerializationBuffer::GetBufferPtr()
 {
 	return m_pSerializeBuffer;
 }
 
-char* CSerializationBuf::GetReadBufferPtr()
+char* CSerializationBuffer::GetReadBufferPtr()
 {
 	return &m_pSerializeBuffer[m_iRead];
 }
 
-char* CSerializationBuf::GetWriteBufferPtr()
+char* CSerializationBuffer::GetWriteBufferPtr()
 {
 	return &m_pSerializeBuffer[m_iWrite];
 }
 
-int CSerializationBuf::GetUseSize()
+int CSerializationBuffer::GetUseSize()
 {
-	return m_iWrite - m_iRead - HEADER_SIZE;
+	return m_iWrite - m_iRead;
 }
 
-int CSerializationBuf::GetFreeSize()
+int CSerializationBuffer::GetFreeSize()
 {
 	return m_iSize - m_iWrite;
 }
 
-int CSerializationBuf::GetAllUseSize()
-{
-	return m_iWriteLast - m_iRead;
-}
-
-void CSerializationBuf::SetWriteZero()
-{
-	m_iWrite = 0;
-}
-
-int CSerializationBuf::GetLastWrite()
+int CSerializationBuffer::GetLastWrite()
 {
 	return m_iWriteLast;
 }
 
-void CSerializationBuf::WritePtrSetHeader()
+void CSerializationBuffer::WritePtrSetPayload(int HeaderSize)
+{
+	m_iWrite = HeaderSize;
+}
+
+void CSerializationBuffer::WritePtrSetHeader()
 {
 	m_iWriteLast = m_iWrite;
 	m_iWrite = 0;
 }
 
-void CSerializationBuf::WritePtrSetLast()
+void CSerializationBuffer::WritePtrSetLast()
 {
 	m_iWrite = m_iWriteLast;
-}
-
-//////////////////////////////////////////////////////////////////
-// static
-//////////////////////////////////////////////////////////////////
-
-CSerializationBuf* CSerializationBuf::Alloc()
-{
-	return CSerializationBuf::pMemoryPool->Alloc();
-}
-
-void CSerializationBuf::AddRefCount(CSerializationBuf* AddRefBuf)
-{
-	InterlockedIncrement(&AddRefBuf->m_iRefCount);
-}
-
-void CSerializationBuf::Free(CSerializationBuf* DeleteBuf)
-{
-	UINT RefCnt = InterlockedDecrement(&DeleteBuf->m_iRefCount);
-	if (RefCnt == 0)
-	{
-		//DeleteBuf->Init();
-		DeleteBuf->m_byError = 0;
-		DeleteBuf->m_iWrite = HEADER_SIZE;
-		DeleteBuf->m_iRead = 0;
-		DeleteBuf->m_iWriteLast = 0;
-		DeleteBuf->m_iUserWriteBefore = HEADER_SIZE;
-		DeleteBuf->m_iRefCount = 1;
-		CSerializationBuf::pMemoryPool->Free(DeleteBuf);
-	}
-}
-
-void CSerializationBuf::ChunkFreeForcibly()
-{
-	CSerializationBuf::pMemoryPool->ChunkFreeForcibly();
 }
 
 //////////////////////////////////////////////////////////////////
 // Operator <<
 //////////////////////////////////////////////////////////////////
 
-CSerializationBuf &CSerializationBuf::operator<<(int Input)
+CSerializationBuffer &CSerializationBuffer::operator<<(int Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(WORD Input)
-{
-	*((short*)(&m_pSerializeBuffer[m_iWrite])) = *(short*)&Input;
-	m_iWrite += sizeof(WORD);
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator<<(DWORD Input)
+CSerializationBuffer &CSerializationBuffer::operator<<(WORD Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(UINT Input)
+CSerializationBuffer &CSerializationBuffer::operator<<(DWORD Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(UINT64 Input)
-{
-	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&Input;
-	m_iWrite += sizeof(UINT64);
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator<<(char Input)
+CSerializationBuffer &CSerializationBuffer::operator<<(UINT Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(BYTE Input)
+CSerializationBuffer &CSerializationBuffer::operator<<(UINT64 Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(float Input)
+CSerializationBuffer &CSerializationBuffer::operator<<(char Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(__int64 Input)
+CSerializationBuffer &CSerializationBuffer::operator<<(BYTE Input)
 {
-	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&Input;
-	m_iWrite += sizeof(__int64);
+	WriteBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CSerializationBuffer &CSerializationBuffer::operator<<(float Input)
+{
+	WriteBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CSerializationBuffer &CSerializationBuffer::operator<<(__int64 Input)
+{
+	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
@@ -330,59 +281,56 @@ CSerializationBuf &CSerializationBuf::operator<<(__int64 Input)
 // Operator >>
 //////////////////////////////////////////////////////////////////
 
-CSerializationBuf &CSerializationBuf::operator>>(int &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(int &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(WORD &Input)
-{
-	*((short*)(&Input)) = *(short*)&m_pSerializeBuffer[m_iRead];
-	m_iRead += sizeof(WORD);
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator>>(DWORD &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(WORD &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(char &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(DWORD &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(BYTE &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(char &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(float &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(BYTE &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(UINT &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(float &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(UINT64 &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(UINT &Input)
 {
-	*((long long*)(&Input)) = *(long long*)&m_pSerializeBuffer[m_iRead];
-	m_iRead += sizeof(UINT64);
+	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(__int64 &Input)
+CSerializationBuffer &CSerializationBuffer::operator>>(UINT64 &Input)
 {
-	*((long long*)(&Input)) = *(long long*)&m_pSerializeBuffer[m_iRead];
-	m_iRead += sizeof(__int64);
+	ReadBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CSerializationBuffer &CSerializationBuffer::operator>>(__int64 &Input)
+{
+	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }

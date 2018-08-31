@@ -5,7 +5,9 @@
 #include <WS2tcpip.h>
 #include "CrashDump.h"
 #include "LanServerSerializeBuf.h"
+#include "Profiler.h"
 
+//CCrashDump dump;
 CCrashDump dump;
 
 CLanServer::CLanServer()
@@ -71,11 +73,9 @@ bool CLanServer::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool 
 
 	m_uiMaxClient = MaxClient;
 	m_pSessionArray = new Session[MaxClient];
-	//m_pSessionIndexStack = new Stack<WORD>(MaxClient);
 	m_pSessionIndexStack = new CLockFreeStack<WORD>();
 	for (int i = MaxClient - 1; i >= 0; --i)
 		m_pSessionIndexStack->Push(i);
-	//InitializeCriticalSection(&m_IndexStackCriticalSection);
 	m_uiNumOfUser = 0;
 
 	m_pWorkerThreadHandle = new HANDLE[NumOfWorkerThread];
@@ -102,7 +102,7 @@ bool CLanServer::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool 
 		Error.LanServerErr = LANSERVER_ERR::SETSOCKOPT_ERR;
 	}
 
-	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, NumOfWorkerThread);
+	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, /*NumOfWorkerThread*/2);
 	if (m_hWorkerIOCP == NULL)
 	{
 		st_Error Error;
@@ -118,12 +118,19 @@ void CLanServer::Stop()
 {
 	closesocket(m_ListenSock);
 	WaitForSingleObject(m_hAcceptThread, INFINITE);
+	for (UINT i = 0; i < m_uiMaxClient; ++i)
+	{
+		if (m_pSessionArray[i].IsUseSession)
+		{
+			shutdown(m_pSessionArray[i].sock, SD_BOTH);
+		}
+	}
+
 	PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, NULL);
 	WaitForMultipleObjects(m_byNumOfWorkerThread, m_pWorkerThreadHandle, TRUE, INFINITE);
 
 	delete[] m_pSessionArray;
 	delete m_pSessionIndexStack;
-	//DeleteCriticalSection(&m_IndexStackCriticalSection);
 
 	CloseHandle(m_hAcceptThread);
 	for (BYTE i = 0; i < m_byNumOfWorkerThread; ++i)
@@ -135,21 +142,51 @@ void CLanServer::Stop()
 
 bool CLanServer::ReleaseSession(Session *pSession)
 {
-	__int64 pDest[ONE_SEND_WSABUF_MAX] = { 0 };
-	int ReadSendRingBufferSize = pSession->SendIOData.RingBuffer.GetUseSize();
-	pSession->SendIOData.RingBuffer.Dequeue((char*)&pDest, (ReadSendRingBufferSize));
-	for (int i = 0; i < ReadSendRingBufferSize >> 3; ++i)
-	{
-		CSerializationBuf::Free((CSerializationBuf*)pDest[i]);
-	}
-	InterlockedAdd(&pSession->Del, ReadSendRingBufferSize >> 3);
-	InterlockedAdd(&g_ULLConuntOfDel, ReadSendRingBufferSize >> 3);
+	//int Rest = pSession->SendIOData.SendQ.GetRestSize();
+	//int StoreNumber = 0;
+	//while(pSession->pSeirializeBufStore[StoreNumber] != NULL)
+	//{
+	//	CSerializationBuf::Free(pSession->pSeirializeBufStore[StoreNumber]);
+	//	pSession->pSeirializeBufStore[StoreNumber] = NULL;
+	//	++StoreNumber;
+	//}
+	//pSession->Del += StoreNumber;
+	//InterlockedAdd(&g_ULLConuntOfDel, Rest);
 
-	if (pSession->New != pSession->Del)
+	if (InterlockedCompareExchange64((LONG64*)&pSession->IOCount, 0, df_RELEASE_VALUE) != df_RELEASE_VALUE)
+		return false;
+
+	int SendBufferRestSize = pSession->SendIOData.lBufferCount;
+	int Rest = pSession->SendIOData.SendQ.GetRestSize();
+	// SendPost 에서 옮겨졌으나 보내지 못한 직렬화 버퍼들을 반환함
+	for (int i = 0; i < SendBufferRestSize; ++i)
 	{
-		dump.Crash();
+		Begin("Free");
+		CSerializationBuf::Free(pSession->pSeirializeBufStore[i]);
+		End("Free");
 	}
-	InterlockedAdd(&pSession->ReadSendRingbuffer, -ReadSendRingBufferSize);
+
+	// 큐에서 아직 꺼내오지 못한 직렬화 버퍼가 있다면 해당 직렬화 버퍼들을 반환함
+	if (Rest > 0)
+	{
+		CSerializationBuf *DeleteBuf;
+		for (int i = 0; i < Rest; ++i)
+		{
+			pSession->SendIOData.SendQ.Dequeue(&DeleteBuf);
+			Begin("Free");
+			CSerializationBuf::Free(DeleteBuf);
+			End("Free");
+		}
+		//pSession->Del += Rest;
+	}
+
+	//int Total = SendBufferRestSize + Rest;
+	//pSession->Del += SendBufferRestSize;
+	//InterlockedAdd(&g_ULLConuntOfDel, Total);
+	//if (pSession->New != pSession->Del)
+	//{
+	//	dump.Crash();
+	//}
 
 	closesocket(pSession->sock);
 	pSession->IsUseSession = FALSE;
@@ -157,13 +194,9 @@ bool CLanServer::ReleaseSession(Session *pSession)
 	UINT64 ID = pSession->SessionID;
 	WORD StackIndex = (WORD)(ID >> SESSION_INDEX_SHIFT);
 
-	//EnterCriticalSection(&m_IndexStackCriticalSection);
-	//if (StackIndex > 199)
-	//	printf("A");
-	m_pSessionIndexStack->Push(StackIndex);
-	//LeaveCriticalSection(&m_IndexStackCriticalSection);
-
 	InterlockedDecrement(&m_uiNumOfUser);
+	m_pSessionIndexStack->Push(StackIndex);
+
 	OnClientLeave(ID);
 
 	return true;
@@ -173,54 +206,34 @@ bool CLanServer::DisConnect(UINT64 SessionID)
 {
 	WORD StackIndex = (WORD)(SessionID >> SESSION_INDEX_SHIFT);
 
+	if (InterlockedIncrement(&m_pSessionArray[StackIndex].IOCount) == 1)
+	{
+		InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount);
+		if(m_pSessionArray[StackIndex].IsUseSession == FALSE)
+			ReleaseSession(&m_pSessionArray[StackIndex]);
+		return false;
+	}
+
 	if (m_pSessionArray[StackIndex].IsUseSession == FALSE)
 	{
+		// 이후 컨텐츠가 들어간다면 발생할 가능성이 존재함
+		//////////////////////////////////////////////////////
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
 		Error.LanServerErr = LANSERVER_ERR::SESSION_NULL_ERR;
 		OnError(&Error);
 		return false;
-	}
-	shutdown(m_pSessionArray[StackIndex].sock, SD_BOTH);
-
-	return true;
-}
-
-bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
-{
-
-	WORD StackIndex = (WORD)(SessionID >> SESSION_INDEX_SHIFT);
-	if (pSerializeBuf == NULL)
-	{
-		ReleaseSession(&m_pSessionArray[StackIndex]);
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.LanServerErr = LANSERVER_ERR::SERIALIZEBUF_NULL_ERR;
-		OnError(&Error);
-		return false;
+		//////////////////////////////////////////////////////
 	}
 	
-	if (m_pSessionArray[StackIndex].IsUseSession == FALSE)
+	shutdown(m_pSessionArray[StackIndex].sock, SD_BOTH);
+	
+	if (InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount) == 0)
 	{
-		CSerializationBuf::Free(pSerializeBuf);
-		InterlockedIncrement(&g_ULLConuntOfDel);
-		//delete pSerializeBuf;
-		InterlockedIncrement(&m_pSessionArray[StackIndex].Del);
-
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.LanServerErr = LANSERVER_ERR::SESSION_NULL_ERR;
-		OnError(&Error);
+		ReleaseSession(&m_pSessionArray[StackIndex]);
 		return false;
 	}
 
-	InterlockedIncrement(&m_pSessionArray[StackIndex].New);
-	WORD HeaderSize = 8;
-	pSerializeBuf->WritePtrSetHeader();
-	*pSerializeBuf << HeaderSize;
-
-	m_pSessionArray[StackIndex].SendIOData.RingBuffer.Enqueue/*.LockEnqueue*/((char*)&pSerializeBuf, 8);
-	SendPost(&m_pSessionArray[StackIndex]);
 	return true;
 }
 
@@ -239,7 +252,7 @@ UINT CLanServer::Accepter()
 		if (clientsock == INVALID_SOCKET)
 		{
 			int Err = WSAGetLastError();
-			if (Err == WSAEWOULDBLOCK)
+			if (Err == WSAEWOULDBLOCK) // ?
 			{
 				continue;
 			}
@@ -265,32 +278,30 @@ UINT CLanServer::Accepter()
 
 		UINT64 SessionID = InterlockedIncrement(&m_iIDCount);
 		// 가장 상위 2 비트를 Session Stack 의 Index 로 사용함
-		//EnterCriticalSection(&m_IndexStackCriticalSection);
 		UINT64 SessionIdx = 0;
 		WORD Index;
 		m_pSessionIndexStack->Pop(&Index);
 		SessionIdx = Index;
-		//LeaveCriticalSection(&m_IndexStackCriticalSection);
 		SessionID += (SessionIdx << SESSION_INDEX_SHIFT);
 
 		m_pSessionArray[SessionIdx].IOCount = 1;
 		m_pSessionArray[SessionIdx].IsUseSession = TRUE;
 		m_pSessionArray[SessionIdx].sock = clientsock;
 		m_pSessionArray[SessionIdx].SessionID = SessionID;
-		m_pSessionArray[SessionIdx].ReadSendRingbuffer = 0;
 
 		m_pSessionArray[SessionIdx].RecvIOData.wBufferCount = 0;
-		m_pSessionArray[SessionIdx].SendIOData.wBufferCount = 0;
+		m_pSessionArray[SessionIdx].SendIOData.lBufferCount = 0;
 		m_pSessionArray[SessionIdx].RecvIOData.IOMode = 0;
 		m_pSessionArray[SessionIdx].SendIOData.IOMode = 0;
+
 		ZeroMemory(&m_pSessionArray[SessionIdx].RecvIOData.Overlapped, sizeof(OVERLAPPED));
 		ZeroMemory(&m_pSessionArray[SessionIdx].SendIOData.Overlapped, sizeof(OVERLAPPED));
-		m_pSessionArray[SessionIdx].RecvIOData.RingBuffer.InitPointer();
-		m_pSessionArray[SessionIdx].SendIOData.RingBuffer.InitPointer();
 
+		m_pSessionArray[SessionIdx].RecvIOData.RingBuffer.InitPointer();
+		//m_pSessionArray[SessionIdx].SendIOData.SendQ.InitQueue();
 		/////////////////////////////////////////////////////////////////////////
-		m_pSessionArray[SessionIdx].New = 0;
-		m_pSessionArray[SessionIdx].Del = 0;
+		//m_pSessionArray[SessionIdx].New = 0;
+		//m_pSessionArray[SessionIdx].Del = 0;
 		/////////////////////////////////////////////////////////////////////////
 
 		int SendBufSize = 0;
@@ -318,12 +329,14 @@ UINT CLanServer::Accepter()
 			ReleaseSession(&m_pSessionArray[SessionIdx]);
 	}
 
+	CSerializationBuf::ChunkFreeForcibly();
 	return 0;
 }
 
 UINT CLanServer::Worker()
 {
 	char cPostRetval;
+	bool GQCSClear;
 	int retval;
 	DWORD Transferred;
 	Session *pSession;
@@ -337,79 +350,103 @@ UINT CLanServer::Worker()
 		pSession = NULL;
 		lpOverlapped = NULL;
 
-		GetQueuedCompletionStatus(m_hWorkerIOCP, &Transferred, (PULONG_PTR)&pSession, &lpOverlapped, INFINITE);
+		GQCSClear = GetQueuedCompletionStatus(m_hWorkerIOCP, &Transferred, (PULONG_PTR)&pSession, &lpOverlapped, INFINITE);
 		OnWorkerThreadBegin();
-		// 외부 종료코드에 의한 종료
-		if (pSession == NULL)
+		// GQCS 에 완료 통지가 왔을 경우
+		if (GQCSClear)
 		{
-			PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, NULL);
-			break;
-		}
-		else if (lpOverlapped == NULL)
-		{
-			st_Error Error;
-			Error.GetLastErr = WSAGetLastError();
-			Error.LanServerErr = LANSERVER_ERR::OVERLAPPED_NULL_ERR;
-			OnError(&Error);
-			continue;
-		}
-		// 클라이언트가 종료함
-		else if (Transferred == 0)
-		{
-			// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-			IOCount = InterlockedDecrement(&pSession->IOCount);
-			if (IOCount == 0)
-				ReleaseSession(pSession);
-
-			continue;
-		}
-		else if (lpOverlapped == &pSession->RecvIOData.Overlapped)
-		{
+			// 외부 종료코드에 의한 종료
+			if (pSession == NULL)
+			{
+				PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, NULL);
+				break;
+			}
 			// recv 파트
-			pSession->RecvIOData.RingBuffer.MoveWritePos/*LockMoveWritePos*/(Transferred);
-			int RingBufferRestSize = Transferred;
-
-			while (RingBufferRestSize != 0)
+			if (lpOverlapped == &pSession->RecvIOData.Overlapped)
 			{
-				WORD Header;
-				pSession->RecvIOData.RingBuffer.Peek((char*)&Header, sizeof(WORD));
-				if (Header != 8)
+				pSession->RecvIOData.RingBuffer.MoveWritePos(Transferred);
+				int RingBufferRestSize = Transferred;
+
+				while (RingBufferRestSize != 0)
 				{
-					IOCount = InterlockedDecrement(&pSession->IOCount);
-					break;
+					WORD Header;
+					pSession->RecvIOData.RingBuffer.Peek((char*)&Header, sizeof(WORD));
+					if (Header != 8)
+					{
+						IOCount = InterlockedDecrement(&pSession->IOCount);
+						break;
+					}
+					else if (pSession->RecvIOData.RingBuffer.GetUseSize() < Header + sizeof(WORD))
+						break;
+					pSession->RecvIOData.RingBuffer.RemoveData(sizeof(WORD));
+
+					CSerializationBuf RecvSerializeBuf;
+					//RecvSerializeBuf.SetWriteZero();
+					RecvSerializeBuf.m_iWrite = 0;
+					//retval = pSession->RecvIOData.RingBuffer.Dequeue(RecvSerializeBuf.GetWriteBufferPtr(), Header);
+					retval = pSession->RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], Header);
+					//RecvSerializeBuf.MoveWritePos(retval);
+					RecvSerializeBuf.m_iWrite += retval;
+					RingBufferRestSize -= (retval + sizeof(WORD));
+					OnRecv(pSession->SessionID, &RecvSerializeBuf);
 				}
-				else if (pSession->RecvIOData.RingBuffer.GetUseSize() < Header + sizeof(WORD))
-					break;
-				pSession->RecvIOData.RingBuffer.RemoveData(sizeof(WORD));
 
-				CSerializationBuf RecvSerializeBuf;
-				RecvSerializeBuf.SetWriteZero();
-				retval = pSession->RecvIOData.RingBuffer.Dequeue(RecvSerializeBuf.GetWriteBufferPtr(), Header);
-				RecvSerializeBuf.MoveWritePos(retval);
-				RingBufferRestSize -= (retval + sizeof(WORD));
-				OnRecv(pSession->SessionID, &RecvSerializeBuf);
+				cPostRetval = RecvPost(pSession);
 			}
-
-			cPostRetval = RecvPost(pSession);
-		}
-		else if (lpOverlapped == &pSession->SendIOData.Overlapped)
-		{
 			// send 파트
-			__int64 pDest[ONE_SEND_WSABUF_MAX] = { 0 };
-			int ReadSendRingBufferSize = pSession->ReadSendRingbuffer;
-			pSession->SendIOData.RingBuffer.Dequeue((char*)&pDest, (ReadSendRingBufferSize << 3));
-			for (int i = 0; i < ReadSendRingBufferSize; ++i)
+			else if (lpOverlapped == &pSession->SendIOData.Overlapped)
 			{
-				CSerializationBuf::Free((CSerializationBuf*)pDest[i]);
-				InterlockedIncrement(&g_ULLConuntOfDel);
-				//delete (CSerializationBuf*)pDest[i];
-			}
-			InterlockedAdd(&pSession->Del, ReadSendRingBufferSize);
-			InterlockedAdd(&pSession->ReadSendRingbuffer, -ReadSendRingBufferSize);
+				//int BufferCount = 0;
+				//while (pSession->pSeirializeBufStore[BufferCount] != NULL)
+				//{
+				//		CSerializationBuf::Free(pSession->pSeirializeBufStore[BufferCount]);
+				//		pSession->pSeirializeBufStore[BufferCount] = NULL;
+				//		++BufferCount;
+				//}
+				int BufferCount = pSession->SendIOData.lBufferCount;
+				for (int i = 0; i < BufferCount; ++i)
+				{
+					Begin("Free");
+					CSerializationBuf::Free(pSession->pSeirializeBufStore[i]);
+					End("Free");
 
-			OnSend();
-			InterlockedExchange(&pSession->SendIOData.IOMode, NONSENDING);
-			cPostRetval = SendPost(pSession);
+					////////////////////////////////////////
+					//pSession->pSeirializeBufStore[i] = NULL;
+					////////////////////////////////////////
+				}
+
+				pSession->SendIOData.lBufferCount -= BufferCount;
+				//InterlockedAdd(&g_ULLConuntOfDel, BufferCount);
+				//InterlockedAdd(&pSession->Del, BufferCount); // 여기 다시 생각해 볼 것
+				//pSession->Del += BufferCount;
+				//InterlockedAdd(&pSession->SendIOData.lBufferCount, -BufferCount); // 여기 다시 생각해 볼 것
+
+				OnSend();
+				InterlockedExchange(&pSession->SendIOData.IOMode, NONSENDING); // 여기 다시 생각해 볼 것
+				cPostRetval = SendPost(pSession);
+			}
+		}
+		// GQCS 가 다른 이유로 실패하였을 경우
+		else
+		{
+			if (lpOverlapped == NULL)
+			{
+				st_Error Error;
+				Error.GetLastErr = WSAGetLastError();
+				Error.LanServerErr = LANSERVER_ERR::OVERLAPPED_NULL_ERR;
+				OnError(&Error);
+				continue;
+			}
+			// 클라이언트가 종료함
+			else if (Transferred == 0)
+			{
+				// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
+				IOCount = InterlockedDecrement(&pSession->IOCount);
+				if (IOCount == 0)
+					ReleaseSession(pSession);
+
+				continue;
+			}
 		}
 
 		OnWorkerThreadEnd();
@@ -421,6 +458,7 @@ UINT CLanServer::Worker()
 			ReleaseSession(pSession);
 	}
 
+	CSerializationBuf::ChunkFreeForcibly();
 	return 0;
 }
 
@@ -488,6 +526,79 @@ char CLanServer::RecvPost(Session *pSession)
 	return POST_RETVAL_COMPLETE;
 }
 
+bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
+{
+	WORD StackIndex = (WORD)(SessionID >> SESSION_INDEX_SHIFT);
+
+	if (pSerializeBuf == NULL)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.LanServerErr = LANSERVER_ERR::SERIALIZEBUF_NULL_ERR;
+		OnError(&Error);
+		return false;
+	}
+	
+	if (m_pSessionArray[StackIndex].SessionID != SessionID)
+	{
+		Begin("Free");
+		CSerializationBuf::Free(pSerializeBuf);
+		End("Free");
+
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.LanServerErr = LANSERVER_ERR::INCORRECT_SESSION;
+		OnError(&Error);
+		return false;
+	}
+
+	if (InterlockedIncrement(&m_pSessionArray[StackIndex].IOCount) == 1)
+	{
+		CSerializationBuf::Free(pSerializeBuf);
+		InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount);
+		if (m_pSessionArray[StackIndex].IsUseSession)
+			ReleaseSession(&m_pSessionArray[StackIndex]);
+
+		return false;
+	}
+
+	if (m_pSessionArray[StackIndex].IsUseSession == FALSE)
+	{
+		Begin("Free");
+		CSerializationBuf::Free(pSerializeBuf);
+		End("Free");
+
+		// 이후 컨텐츠가 들어간다면 발생할 가능성이 존재함
+		//////////////////////////////////////////////////////
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.LanServerErr = LANSERVER_ERR::SESSION_NULL_ERR;
+		OnError(&Error);
+		//////////////////////////////////////////////////////
+		return false;
+	}
+
+	//InterlockedIncrement(&m_pSessionArray[StackIndex].New);
+	WORD HeaderSize = 8;
+	//pSerializeBuf->WritePtrSetHeader();
+	pSerializeBuf->m_iWriteLast = pSerializeBuf->m_iWrite;
+	pSerializeBuf->m_iWrite = 0;
+	*pSerializeBuf << HeaderSize;
+
+	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSerializeBuf);
+	SendPost(&m_pSessionArray[StackIndex]);
+
+	if (InterlockedDecrement(&m_pSessionArray[StackIndex].IOCount) == 0)
+	{
+		if(m_pSessionArray[StackIndex].IsUseSession)
+			ReleaseSession(&m_pSessionArray[StackIndex]);
+
+		return false;
+	}
+
+	return true;
+}
+
 // 해당 함수가 정상완료 및 pSession이 해제되지 않았으면 true 그 외에는 false를 반환함
 char CLanServer::SendPost(Session *pSession)
 {
@@ -497,11 +608,11 @@ char CLanServer::SendPost(Session *pSession)
 			return true;
 
 		ULONGLONG IOCount;
-		int UseSize = pSession->SendIOData.RingBuffer.GetUseSize();
+		int UseSize = pSession->SendIOData.SendQ.GetRestSize();
 		if (UseSize == 0)
 		{
 			InterlockedExchange(&pSession->SendIOData.IOMode, NONSENDING);
-			if (pSession->SendIOData.RingBuffer.GetUseSize() > 0)
+			if (pSession->SendIOData.SendQ.GetRestSize() > 0)
 				continue;
 			return POST_RETVAL_COMPLETE;
 		}
@@ -517,51 +628,25 @@ char CLanServer::SendPost(Session *pSession)
 			return POST_RETVAL_ERR;
 		}
 
-		int BrokenSize = pSession->SendIOData.RingBuffer.GetNotBrokenGetSize();
-		int RestSize = UseSize - BrokenSize;
-
-		BYTE wsaBufCount = 0;
 		WSABUF wsaSendBuf[ONE_SEND_WSABUF_MAX];
-		CSerializationBuf *pRingBufferDest[ONE_SEND_WSABUF_MAX];
-		int UseRingBufferPtrSize = pSession->SendIOData.RingBuffer.GetUseSize() >> 3;
-		pSession->SendIOData.RingBuffer.Peek((char*)pRingBufferDest, UseRingBufferPtrSize << 3);
-
-		for (int i = 0; i < UseRingBufferPtrSize; ++i)
+		for (int i = 0; i < UseSize; ++i)
 		{
-			wsaSendBuf[i].buf = pRingBufferDest[i]->GetBufferPtr();
-			wsaSendBuf[i].len = pRingBufferDest[i]->GetAllUseSize();
+			pSession->SendIOData.SendQ.Dequeue(&pSession->pSeirializeBufStore[i]);
+			wsaSendBuf[i].buf = pSession->pSeirializeBufStore[i]->GetBufferPtr();
+			wsaSendBuf[i].len = pSession->pSeirializeBufStore[i]->GetAllUseSize();
 		}
-		InterlockedAdd(&pSession->ReadSendRingbuffer, UseRingBufferPtrSize);
-		int BufCount = UseRingBufferPtrSize;
-		
-		//while (pSession->SendIOData.RingBuffer.GetUseSize() == 0)
-		//{
-		//	wsaSendBuf->buf = ;
-		//	wsaSendBuf->len = ;
-		//	pSession->SendIOData.RingBuffer.Peek((char*)&wsaSendBuf[wsaBufCount], 8);
-		//	++wsaBufCount;
-		//}
-		//pSession->SendIOData.RingBuffer.Peek(, UseSize);
-		/////////////////////////////////////////////////////////////////////////////////////////////
-		//WSABUF wsaBuf[2];
-		//wsaBuf[0].buf = pSession->SendIOData.RingBuffer.GetReadBufferPtr();
-		//wsaBuf[0].len = BrokenSize;
-		//if (RestSize > 0)
-		//{
-		//	wsaBuf[1].buf = pSession->SendIOData.RingBuffer.GetBufferPtr();
-		//	wsaBuf[1].len = RestSize;
-		//	BufCount++;
-		//}
+		pSession->SendIOData.lBufferCount += UseSize;
+		//InterlockedAdd(&pSession->SendIOData.lBufferCount, UseSize);
 
 		InterlockedIncrement(&pSession->IOCount);
-		int retval = WSASend(pSession->sock, wsaSendBuf, BufCount, NULL, 0, &pSession->SendIOData.Overlapped, 0);
+		int retval = WSASend(pSession->sock, wsaSendBuf, UseSize, NULL, 0, &pSession->SendIOData.Overlapped, 0);
 		if (retval == SOCKET_ERROR)
 		{
 			int err = WSAGetLastError();
 			if (err != ERROR_IO_PENDING)
 			{
-				if (err == WSAENOBUFS)
-					dump.Crash();
+				//if (err == WSAENOBUFS)
+				//	dump.Crash();
 				st_Error Error;
 				Error.GetLastErr = err;
 				Error.LanServerErr = LANSERVER_ERR::WSASEND_ERR;
@@ -574,7 +659,7 @@ char CLanServer::SendPost(Session *pSession)
 					ReleaseSession(pSession);
 					return POST_RETVAL_ERR_SESSION_DELETED;
 				}
-				InterlockedExchange(&pSession->SendIOData.IOMode, NONSENDING);
+
 				return POST_RETVAL_ERR;
 			}
 		}
@@ -590,4 +675,10 @@ UINT CLanServer::GetNumOfUser()
 UINT CLanServer::GetStackRestSize()
 {
 	return m_pSessionIndexStack->GetRestStackSize();
+}
+
+void CLanServer::UseableSession()
+{
+	
+
 }

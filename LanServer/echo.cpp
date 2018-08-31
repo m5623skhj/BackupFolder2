@@ -1,8 +1,8 @@
-#include "stdafx.h"
-#include "Echo.h"
-#include "Log.h"
+#include "PreComfile.h"
 #include "Profiler.h"
+#include "Echo.h"
 #include "LanServerSerializeBuf.h"
+#include "Log.h"
 
 CEcho::CEcho(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient)
 {

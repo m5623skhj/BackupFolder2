@@ -1,4 +1,5 @@
 #pragma once
+#include <WinSock2.h>
 #include <unordered_map>
 #include "Ringbuffer.h"
 //#include "Stack.h"
@@ -42,7 +43,9 @@ enum LANSERVER_ERR
 	SERIALIZEBUF_NULL_ERR,
 	RINGBUFFER_MAX_SIZE_ERR,
 	RINGBUFFER_MIN_SIZE_ERR,
-	INCORRECT_SESSION,
+	INCORRECT_SESSION_ERR,
+	HEADER_CODE_ERR,
+	CHECKSUM_ERR,
 	END_OF_ERR
 };
 
@@ -59,7 +62,7 @@ struct st_Error
 };
 
 class CSerializationBuf;
-class CLanServer
+class CNetServer
 {
 private:
 	BYTE		m_byNumOfWorkerThread;
@@ -123,8 +126,8 @@ private:
 protected:
 
 public:
-	CLanServer();
-	virtual ~CLanServer();
+	CNetServer();
+	virtual ~CNetServer();
 
 	bool Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient);
 	void Stop();

@@ -1,5 +1,6 @@
-#include "stdafx.h"
+#include "PreComfile.h"
 #include "Profiler.h"
+//#include <Windows.h>
 #include <processthreadsapi.h>
 
 #undef Begin

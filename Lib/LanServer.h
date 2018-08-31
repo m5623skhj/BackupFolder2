@@ -2,8 +2,9 @@
 #include <WinSock2.h>
 #include <unordered_map>
 #include "Ringbuffer.h"
-#include "Stack.h"
-#include "CommonSource/LockFreeStack.h"
+//#include "Stack.h"
+#include "LockFreeStack.h"
+#include "LockFreeQueue.h"
 
 // 해당 소켓이 송신중에 있는지 아닌지
 #define NONSENDING	0
@@ -17,6 +18,8 @@
 
 #define ONE_SEND_WSABUF_MAX					200
 
+#define df_RELEASE_VALUE					0x100000000
+
 //////////////////////////////////////////////////////////////////////////////////////
 // LANSERVER_ERR
 // CLanServer 내에서 발생하는 에러 메시지들의 집합
@@ -24,22 +27,23 @@
 //////////////////////////////////////////////////////////////////////////////////////
 enum LANSERVER_ERR
 {
-	NO_ERR = 0, 
-	WSASTARTUP_ERR, 
-	LISTEN_SOCKET_ERR, 
-	LISTEN_BIND_ERR, 
+	NO_ERR = 0,
+	WSASTARTUP_ERR,
+	LISTEN_SOCKET_ERR,
+	LISTEN_BIND_ERR,
 	LISTEN_LISTEN_ERR,
-	BEGINTHREAD_ERR, 
+	BEGINTHREAD_ERR,
 	SETSOCKOPT_ERR,
-	WORKERIOCP_NULL_ERR, 
-	SESSION_NULL_ERR, 
+	WORKERIOCP_NULL_ERR,
+	SESSION_NULL_ERR,
 	ACCEPT_ERR,
-	WSARECV_ERR, 
-	WSASEND_ERR, 
-	OVERLAPPED_NULL_ERR, 
-	SERIALIZEBUF_NULL_ERR, 
+	WSARECV_ERR,
+	WSASEND_ERR,
+	OVERLAPPED_NULL_ERR,
+	SERIALIZEBUF_NULL_ERR,
 	RINGBUFFER_MAX_SIZE_ERR,
-	RINGBUFFER_MIN_SIZE_ERR, 
+	RINGBUFFER_MIN_SIZE_ERR,
+	INCORRECT_SESSION,
 	END_OF_ERR
 };
 
@@ -58,7 +62,7 @@ struct st_Error
 class CSerializationBuf;
 class CLanServer
 {
-private :
+private:
 	BYTE		m_byNumOfWorkerThread;
 	SOCKET		m_ListenSock;
 	UINT		m_uiNumOfUser;
@@ -79,26 +83,33 @@ private :
 		CRingbuffer RingBuffer;
 	};
 
+	struct OVERLAPPED_SEND_IO_DATA
+	{
+		LONG										lBufferCount;
+		UINT										IOMode;
+		OVERLAPPED									Overlapped;
+		CLockFreeQueue<CSerializationBuf*>			SendQ;
+	};
+
 	struct Session
 	{
-		BOOL				IsUseSession;
-		LONG				ReadSendRingbuffer;
-		SOCKET				sock;
-		UINT				IOCount;
-		UINT64				SessionID;
-		OVERLAPPEDIODATA	RecvIOData;
-		OVERLAPPEDIODATA	SendIOData;
+		UINT						IOCount;
+		UINT						IsUseSession;
+		SOCKET						sock;
+		UINT64						SessionID;
+		OVERLAPPEDIODATA			RecvIOData;
+		OVERLAPPED_SEND_IO_DATA		SendIOData;
+
+		CSerializationBuf*			pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
 
 		///////////////////////////////////////////
-		LONG				New;
-		LONG				Del;
+		//LONG				New;
+		//LONG				Del;
 		///////////////////////////////////////////
 	};
 
 
 	Session					*m_pSessionArray;
-	//Stack<WORD>				*m_pSessionIndexStack;
-	//CRITICAL_SECTION		m_IndexStackCriticalSection;
 	CLockFreeStack<WORD>	*m_pSessionIndexStack;
 
 	bool ReleaseSession(Session *pSession);
@@ -110,9 +121,9 @@ private :
 	UINT Worker();
 	static UINT __stdcall AcceptThread(LPVOID pLanServer);
 	static UINT __stdcall WorkerThread(LPVOID pLanServer);
-protected :
+protected:
 
-public :
+public:
 	CLanServer();
 	virtual ~CLanServer();
 
@@ -144,6 +155,8 @@ public :
 	UINT GetNumOfUser();
 	UINT GetStackRestSize();
 
-	LONG g_ULLConuntOfNew = 0;
-	LONG g_ULLConuntOfDel = 0;
+	void UseableSession();
+
+	//LONG g_ULLConuntOfNew = 0;
+	//LONG g_ULLConuntOfDel = 0;
 };

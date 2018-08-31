@@ -1,4 +1,4 @@
-#include "stdafx.h"
+#include "PreComfile.h"
 #include "Parse.h"
 #include <stdio.h>
 #include <string.h>
