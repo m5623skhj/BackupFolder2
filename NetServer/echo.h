@@ -12,7 +12,7 @@ private:
 	{
 		int SomeData;
 	};
-	std::unordered_map<UINT64, User*> m_UserMap;
+	std::unordered_map<UINT64, User*> m_UserSessionMap;
 public:
 	// Accept 후 접속처리 완료 후 호출
 	virtual void OnClientJoin(UINT64 OutClientID/* Client 정보 / ClientID / 기타등등 */);
@@ -22,7 +22,7 @@ public:
 	virtual bool OnConnectionRequest();
 
 	// 패킷 수신 완료 후
-	virtual void OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *OutReadBuf);
+	virtual void OnRecv(UINT64 ReceivedSessionID, CNetServerSerializationBuf *OutReadBuf);
 	// 패킷 송신 완료 후
 	virtual void OnSend();
 

@@ -25,9 +25,9 @@ void CEcho::OnClientJoin(UINT64 OutClientID)
 	//// SendPacket 에 넣어 놓으면 Send 가 완료 되었을 시
 	//// 삭제됨
 
-	////m_UserMap.insert({OutClientID, 0});
+	////m_UserSessionMap.insert({OutClientID, 0});
 	//Begin("Alloc");
-	//CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
+	//CNetServerSerializationBuf *SendBuf = CNetServerSerializationBuf::Alloc();
 	//End("Alloc");
 	////InterlockedIncrement(&g_ULLConuntOfNew);
 	//WORD StackIndex = (WORD)(OutClientID >> SESSION_INDEX_SHIFT);
@@ -36,12 +36,12 @@ void CEcho::OnClientJoin(UINT64 OutClientID)
 
 	//SendBuf->AddRefCount(SendBuf);
 	//SendPacket(OutClientID, SendBuf);
-	//CSerializationBuf::Free(SendBuf);
+	//CNetServerSerializationBuf::Free(SendBuf);
 }
 
 void CEcho::OnClientLeave(UINT64 LeaveClientID)
 {
-	//if (m_UserMap.erase(LeaveClientID) != 1)
+	//if (m_UserSessionMap.erase(LeaveClientID) != 1)
 	//{
 	//	_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d", 0, 1001);
 	//}
@@ -52,11 +52,11 @@ bool CEcho::OnConnectionRequest()
 	return true;
 }
 
-void CEcho::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *ServerReceivedBuffer)
+void CEcho::OnRecv(UINT64 ReceivedSessionID, CNetServerSerializationBuf *ServerReceivedBuffer)
 {
 	//__int64 echo = 0;
 	//*ServerReceivedBuffer >> echo;
-	//CSerializationBuf SendBuf;
+	//CNetServerSerializationBuf SendBuf;
 	//SendBuf << echo;
 	//SendPacket(ReceivedSessionID, &SendBuf);
 
@@ -66,7 +66,7 @@ void CEcho::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *ServerReceivedBu
 	char echo4 = 0;
 	*ServerReceivedBuffer >> echo1 >> echo2 >> echo3 >> echo4;
 
-	//if (m_UserMap.find(ReceivedSessionID) == m_UserMap.end())
+	//if (m_UserSessionMap.find(ReceivedSessionID) == m_UserSessionMap.end())
 	//{
 	//	_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d", 0, 1002);
 	//}
@@ -74,7 +74,7 @@ void CEcho::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *ServerReceivedBu
 	// SendPacket 에 넣어 놓으면 Send 가 완료 되었을 시
 	// 삭제됨
 	Begin("Alloc");
-	CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
+	CNetServerSerializationBuf *SendBuf = CNetServerSerializationBuf::Alloc();
 	End("Alloc");
 
 	WORD StackIndex = (WORD)(ReceivedSessionID >> SESSION_INDEX_SHIFT);
@@ -83,7 +83,7 @@ void CEcho::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *ServerReceivedBu
 
 	SendBuf->AddRefCount(SendBuf);
 	SendPacket(ReceivedSessionID, SendBuf);
-	CSerializationBuf::Free(SendBuf);
+	CNetServerSerializationBuf::Free(SendBuf);
 }
 
 void CEcho::OnSend()
@@ -105,7 +105,7 @@ void CEcho::OnError(st_Error *OutError)
 {
 	if (OutError->GetLastErr != 10054)
 	{
-		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d", OutError->GetLastErr, OutError->LanServerErr);
+		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d", OutError->GetLastErr, OutError->NetServerErr);
 		printf_s("==============================================================\n");
 	}
 }
