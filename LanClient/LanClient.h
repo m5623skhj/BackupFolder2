@@ -8,8 +8,6 @@
 // 해당 소켓이 송신중에 있는지 아닌지
 #define NONSENDING	0
 #define SENDING		1
-// 세션 ID 에 대해서 세션 인덱스를 찾기 위한 쉬프트 값
-#define SESSION_INDEX_SHIFT 48
 // Recv / Send Post 반환 값
 #define POST_RETVAL_ERR_SESSION_DELETED		0
 #define POST_RETVAL_ERR						1
@@ -19,7 +17,7 @@
 
 #define df_RELEASE_VALUE					0x100000000
 
-#define dfSERVER_IP							L"127.0.0.1"
+#define dfSERVER_IP							L"127.0.0.1"//L"10.0.0.1"
 #define dfSERVER_PORT						6000
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -65,25 +63,21 @@ struct st_Error
 	int Line = 0;
 };
 
-class CNetServerSerializationBuf;
+class CSerializationBuf;
 class CLanClient
 {
 private:
 	BYTE		m_byNumOfWorkerThread;
-	SOCKET		m_Connet;
-	UINT		m_uiMaxClient;
+	SOCKET		m_sock;
 
-	UINT64		m_iIDCount;
 	WCHAR		m_IP[16];
 
 	HANDLE		*m_pWorkerThreadHandle;
-	HANDLE		m_hAcceptThread;
 	HANDLE		m_hWorkerIOCP;
 
 	struct OVERLAPPEDIODATA
 	{
 		WORD		wBufferCount;
-		UINT		IOMode;
 		OVERLAPPED  Overlapped;
 		CRingbuffer RingBuffer;
 	};
@@ -93,33 +87,18 @@ private:
 		LONG										lBufferCount;
 		UINT										IOMode;
 		OVERLAPPED									Overlapped;
-		CLockFreeQueue<CNetServerSerializationBuf*>	SendQ;
+		CLockFreeQueue<CSerializationBuf*>	SendQ;
 	};
 
-	struct Session
-	{
-		UINT						IOCount;
-		UINT						IsUseSession;
-		SOCKET						sock;
-		UINT64						SessionID;
-		OVERLAPPEDIODATA			RecvIOData;
-		OVERLAPPED_SEND_IO_DATA		SendIOData;
+	UINT						m_IOCount;
+	UINT64						m_SessionID;
+	OVERLAPPEDIODATA			m_RecvIOData;
+	OVERLAPPED_SEND_IO_DATA		m_SendIOData;
 
-		CNetServerSerializationBuf*	pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
+	CSerializationBuf*	pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
 
-		///////////////////////////////////////////
-		//LONG				New;
-		//LONG				Del;
-		///////////////////////////////////////////
-	};
-
-
-	Session					m_pSessionArray;
-
-	bool ReleaseSession(Session *pSession);
-
-	char RecvPost(Session *pSession);
-	char SendPost(Session *pSession);
+	char RecvPost();
+	char SendPost();
 
 	UINT Worker();
 	static UINT __stdcall WorkerThread(LPVOID pLanClient);
@@ -130,21 +109,16 @@ public:
 	CLanClient();
 	virtual ~CLanClient();
 
-	bool Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient);
+	bool Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle);
 	void Stop();
 
-	bool DisConnect(UINT64 SessionID);
-	bool SendPacket(UINT64 SessionID, CNetServerSerializationBuf *pSerializeBuf);
+	bool SendPacket(CSerializationBuf *pSerializeBuf);
 
-	// Accept 후 접속처리 완료 후 호출
-	virtual void OnClientJoin(UINT64 OutClientID/* Client 정보 / ClientID / 기타등등 */) = 0;
-	// Disconnect 후 호출
-	virtual void OnClientLeave(UINT64 ClientID) = 0;
 	// Accept 직후 IP 차단등을 위한 용도
-	virtual bool OnConnectionRequest(const WCHAR *IP) = 0;
+	virtual void OnConnectionComplete() = 0;
 
 	// 패킷 수신 완료 후
-	virtual void OnRecv(UINT64 ReceivedSessionID, CNetServerSerializationBuf *OutReadBuf) = 0;
+	virtual void OnRecv(CSerializationBuf *OutReadBuf) = 0;
 	// 패킷 송신 완료 후
 	virtual void OnSend() = 0;
 

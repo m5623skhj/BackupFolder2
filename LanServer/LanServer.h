@@ -43,6 +43,9 @@ enum LANSERVER_ERR
 	RINGBUFFER_MAX_SIZE_ERR,
 	RINGBUFFER_MIN_SIZE_ERR,
 	INCORRECT_SESSION,
+	HEADER_CODE_ERR,
+	PAYLOAD_SIZE_OVER_ERR,
+	PARSING_ERR,
 	END_OF_ERR
 };
 
@@ -132,6 +135,7 @@ public:
 	bool DisConnect(UINT64 SessionID);
 	bool SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf);
 
+	bool LanServerOptionParsing();
 	// Accept 후 접속처리 완료 후 호출
 	virtual void OnClientJoin(UINT64 OutClientID/* Client 정보 / ClientID / 기타등등 */) = 0;
 	// Disconnect 후 호출

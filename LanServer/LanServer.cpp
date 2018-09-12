@@ -1,13 +1,10 @@
-#include "PreComfile.h"
+#include "PreCompile.h"
 #pragma comment(lib, "ws2_32")
 #include "LanServer.h"
 #include <process.h>
 #include "CrashDump.h"
 #include "LanServerSerializeBuf.h"
 #include "Profiler.h"
-
-//CCrashDump dump;
-CCrashDump dump;
 
 CLanServer::CLanServer()
 {
@@ -23,6 +20,14 @@ bool CLanServer::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool 
 {
 	memcpy(m_IP, IP, sizeof(m_IP));
 	int retval;
+
+	if (!LanServerOptionParsing())
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.LanServerErr = LANSERVER_ERR::PARSING_ERR;
+		return false;
+	}
 
 	WSADATA Wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &Wsa))
@@ -139,6 +144,37 @@ void CLanServer::Stop()
 	WSACleanup();
 }
 
+bool CLanServer::LanServerOptionParsing()
+{
+	_wsetlocale(LC_ALL, L"Korean");
+
+	CParser parser;
+	WCHAR cBuffer[BUFFER_MAX];
+
+	FILE *fp;
+	_wfopen_s(&fp, L"LanServerOption.txt", L"rt, ccs=UNICODE");
+
+	int iJumpBOM = ftell(fp);
+	fseek(fp, 0, SEEK_END);
+	int iFileSize = ftell(fp);
+	fseek(fp, iJumpBOM, SEEK_SET);
+	int FileSize = (int)fread_s(cBuffer, BUFFER_MAX, sizeof(WCHAR), BUFFER_MAX / 2, fp);
+	int iAmend = iFileSize - FileSize; // 개행 문자와 파일 사이즈에 대한 보정값
+	fclose(fp);
+
+	cBuffer[iFileSize - iAmend] = '\0';
+	WCHAR *pBuff = cBuffer;
+
+	int HeaderCode;
+
+	if (!parser.GetValue_Int(pBuff, L"SerializeBuffer", L"HeaderCode", &HeaderCode))
+		return false;
+
+	CSerializationBuf::byHeader = (BYTE)HeaderCode;
+
+	return true;
+}
+
 bool CLanServer::ReleaseSession(Session *pSession)
 {
 	//int Rest = pSession->SendIOData.SendQ.GetRestSize();
@@ -251,11 +287,12 @@ UINT CLanServer::Accepter()
 		if (clientsock == INVALID_SOCKET)
 		{
 			int Err = WSAGetLastError();
-			if (Err == WSAEWOULDBLOCK) // ?
-			{
-				continue;
-			}
-			else if (Err == WSAEINTR)
+			//if (Err == WSAEWOULDBLOCK) // ?
+			//{
+			//	continue;
+			//}
+			//else 
+			if (Err == WSAEINTR)
 			{
 				break;
 			}
@@ -353,39 +390,71 @@ UINT CLanServer::Worker()
 		// GQCS 에 완료 통지가 왔을 경우
 		if (lpOverlapped != NULL)
 		{
+			// 클라이언트가 종료함
+			if (Transferred == 0)
+			{
+				// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
+				IOCount = InterlockedDecrement(&pSession->IOCount);
+				if (IOCount == 0)
+					ReleaseSession(pSession);
+				continue;
+			}
+
 			// recv 파트
 			if (lpOverlapped == &pSession->RecvIOData.Overlapped)
 			{
 				pSession->RecvIOData.RingBuffer.MoveWritePos(Transferred);
 				int RingBufferRestSize = pSession->RecvIOData.RingBuffer.GetUseSize();
+				bool IsError = false;
 
 				while (RingBufferRestSize > HEADER_SIZE)
 				{
-					WORD Header;
-					pSession->RecvIOData.RingBuffer.Peek((char*)&Header, HEADER_SIZE);
-					if (Header != 8)
+					CSerializationBuf &RecvSerializeBuf = *CSerializationBuf::Alloc();
+					RecvSerializeBuf.m_iWrite = 0;
+					pSession->RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, HEADER_SIZE);
+					RecvSerializeBuf.m_iWrite += HEADER_SIZE;
+
+					BYTE Code;
+					WORD PayloadLength;
+					RecvSerializeBuf >> Code >> PayloadLength;
+
+					if (Code != CSerializationBuf::byHeader)
 					{
-						IOCount = InterlockedDecrement(&pSession->IOCount);
+						cPostRetval = POST_RETVAL_ERR;
+						st_Error Err;
+						Err.GetLastErr = 0;
+						Err.LanServerErr = HEADER_CODE_ERR;
+						OnError(&Err);
+						IsError = true;
+						CSerializationBuf::Free(&RecvSerializeBuf);
 						break;
 					}
-					else if (pSession->RecvIOData.RingBuffer.GetUseSize() < Header + HEADER_SIZE)
+					if (RingBufferRestSize < PayloadLength + HEADER_SIZE)
+					{
+						//if (PayloadLength > HEADER_SIZE)
+						//{
+						//	cPostRetval = POST_RETVAL_ERR;
+						//	st_Error Err;
+						//	Err.GetLastErr = 0;
+						//	Err.LanServerErr = PAYLOAD_SIZE_OVER_ERR;
+						//	OnError(&Err);
+						//	IsError = true;
+						//}
+						CSerializationBuf::Free(&RecvSerializeBuf);
 						break;
+					}
 					pSession->RecvIOData.RingBuffer.RemoveData(HEADER_SIZE);
 
-					CSerializationBuf RecvSerializeBuf;
-					//RecvSerializeBuf.SetWriteZero();
-					RecvSerializeBuf.m_iWrite = 0;
-					//retval = pSession->RecvIOData.RingBuffer.Dequeue(RecvSerializeBuf.GetWriteBufferPtr(), Header);
-					retval = pSession->RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], Header);
-					//RecvSerializeBuf.MoveWritePos(retval);
+					retval = pSession->RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
 					RecvSerializeBuf.m_iWrite += retval;
+
 					RingBufferRestSize -= (retval + HEADER_SIZE);
 					OnRecv(pSession->SessionID, &RecvSerializeBuf);
+					CSerializationBuf::Free(&RecvSerializeBuf);
 				}
-
-				cPostRetval = RecvPost(pSession);
-			}
-			// send 파트
+				if (!IsError)
+					cPostRetval = RecvPost(pSession);
+			}			// send 파트
 			else if (lpOverlapped == &pSession->SendIOData.Overlapped)
 			{
 				//int BufferCount = 0;
@@ -416,16 +485,6 @@ UINT CLanServer::Worker()
 				OnSend();
 				InterlockedExchange(&pSession->SendIOData.IOMode, NONSENDING); // 여기 다시 생각해 볼 것
 				cPostRetval = SendPost(pSession);
-			}
-			// 클라이언트가 종료함
-			else if (Transferred == 0)
-			{
-				// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-				IOCount = InterlockedDecrement(&pSession->IOCount);
-				if (IOCount == 0)
-					ReleaseSession(pSession);
-
-				continue;
 			}
 			// 외부 종료코드에 의한 종료
 			if (pSession == NULL)
@@ -573,11 +632,12 @@ bool CLanServer::SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf)
 	}
 
 	//InterlockedIncrement(&m_pSessionArray[StackIndex].New);
-	WORD HeaderSize = 8;
+	//WORD HeaderSize = 8;
 	//pSerializeBuf->WritePtrSetHeader();
+	WORD PayloadSize = pSerializeBuf->GetUseSize();
 	pSerializeBuf->m_iWriteLast = pSerializeBuf->m_iWrite;
 	pSerializeBuf->m_iWrite = 0;
-	*pSerializeBuf << HeaderSize;
+	*pSerializeBuf << CSerializationBuf::byHeader << PayloadSize;
 
 	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSerializeBuf);
 	SendPost(&m_pSessionArray[StackIndex]);
