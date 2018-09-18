@@ -1,9 +1,13 @@
-#include "PreComfile.h"
+#include "PreCompile.h"
 #include "NetServerSerializeBuffer.h"
+#include "NetServer.h"
 #include "LockFreeMemoryPool.h"
 
-CTLSMemoryPool<CSerializationBuf>* CSerializationBuf::pMemoryPool = new CTLSMemoryPool<CSerializationBuf>(NUM_OF_CHUNK, false);
+CTLSMemoryPool<CNetServerSerializationBuf>* CNetServerSerializationBuf::pMemoryPool = new CTLSMemoryPool<CNetServerSerializationBuf>(NUM_OF_CHUNK, false);
+extern CParser g_Paser;
 
+BYTE CNetServerSerializationBuf::m_byHeaderCode = 0;
+BYTE CNetServerSerializationBuf::m_byXORCode = 0;
 
 struct st_Exception
 {
@@ -11,35 +15,35 @@ struct st_Exception
 	WCHAR szErrorComment[1024];
 };
 
-CSerializationBuf::CSerializationBuf() :
-	m_byError(0), m_iWrite(df_HEADER_SIZE), m_iRead(0), m_iWriteLast(0),
+CNetServerSerializationBuf::CNetServerSerializationBuf() :
+	m_byError(0), m_bIsEncoded(FALSE), m_iWrite(df_HEADER_SIZE), m_iRead(df_HEADER_SIZE), m_iWriteLast(0),
 	m_iUserWriteBefore(df_HEADER_SIZE), m_iRefCount(1)
 {
 	Initialize(dfDEFAULTSIZE);
 }
 
-CSerializationBuf::~CSerializationBuf()
+CNetServerSerializationBuf::~CNetServerSerializationBuf()
 {
 	delete[] m_pSerializeBuffer;
 }
 
-void CSerializationBuf::Initialize(int BufferSize)
+void CNetServerSerializationBuf::Initialize(int BufferSize)
 {
 	m_iSize = BufferSize;
 	m_pSerializeBuffer = new char[BufferSize];
 }
 
-void CSerializationBuf::Init()
+void CNetServerSerializationBuf::Init()
 {
 	m_byError = 0;
 	m_iWrite = df_HEADER_SIZE;
-	m_iRead = 0;
+	m_iRead = df_HEADER_SIZE;
 	m_iWriteLast = 0;
 	m_iUserWriteBefore = df_HEADER_SIZE;
 	m_iRefCount = 1;
 }
 
-void CSerializationBuf::Resize(int Size)
+void CNetServerSerializationBuf::Resize(int Size)
 {
 	if (BUFFFER_MAX < Size)
 	{
@@ -60,7 +64,7 @@ void CSerializationBuf::Resize(int Size)
 	m_iSize = Size;
 }
 
-void CSerializationBuf::WriteBuffer(char *pData, int Size)
+void CNetServerSerializationBuf::WriteBuffer(char *pData, int Size)
 {
 	if (BUFFFER_MAX < m_iWrite + Size)
 	{
@@ -94,7 +98,7 @@ void CSerializationBuf::WriteBuffer(char *pData, int Size)
 	m_iWrite += Size;
 }
 
-void CSerializationBuf::ReadBuffer(char *pDest, int Size)
+void CNetServerSerializationBuf::ReadBuffer(char *pDest, int Size)
 {
 	if (m_iSize < m_iRead + Size || m_iWrite < m_iRead + Size)
 	{
@@ -128,12 +132,12 @@ void CSerializationBuf::ReadBuffer(char *pDest, int Size)
 	m_iRead += Size;
 }
 
-void CSerializationBuf::PeekBuffer(char *pDest, int Size)
+void CNetServerSerializationBuf::PeekBuffer(char *pDest, int Size)
 {
 	memcpy_s(pDest, Size, &m_pSerializeBuffer[m_iRead], Size);
 }
 
-void CSerializationBuf::RemoveData(int Size)
+void CNetServerSerializationBuf::RemoveData(int Size)
 {
 	if (m_iSize < m_iRead + Size || m_iWrite < m_iRead + Size)
 	{
@@ -148,7 +152,7 @@ void CSerializationBuf::RemoveData(int Size)
 	m_iRead += Size;
 }
 
-void CSerializationBuf::MoveWritePos(int Size)
+void CNetServerSerializationBuf::MoveWritePos(int Size)
 {
 	if (m_iSize < m_iWrite + Size + df_HEADER_SIZE)
 	{
@@ -163,81 +167,81 @@ void CSerializationBuf::MoveWritePos(int Size)
 	m_iWrite += Size;
 }
 
-void CSerializationBuf::MoveWritePosThisPos(int ThisPos)
+void CNetServerSerializationBuf::MoveWritePosThisPos(int ThisPos)
 {
 	m_iUserWriteBefore = m_iWrite;
 	m_iWrite = df_HEADER_SIZE + ThisPos;
 }
 
-void CSerializationBuf::MoveWritePosBeforeCallThisPos()
+void CNetServerSerializationBuf::MoveWritePosBeforeCallThisPos()
 {
 	m_iWrite = m_iUserWriteBefore;
 }
 
-BYTE CSerializationBuf::GetBufferError()
+BYTE CNetServerSerializationBuf::GetBufferError()
 {
 	return m_byError;
 }
 
-char* CSerializationBuf::GetBufferPtr()
+char* CNetServerSerializationBuf::GetBufferPtr()
 {
 	return m_pSerializeBuffer;
 }
 
-char* CSerializationBuf::GetReadBufferPtr()
+char* CNetServerSerializationBuf::GetReadBufferPtr()
 {
 	return &m_pSerializeBuffer[m_iRead];
 }
 
-char* CSerializationBuf::GetWriteBufferPtr()
+char* CNetServerSerializationBuf::GetWriteBufferPtr()
 {
 	return &m_pSerializeBuffer[m_iWrite];
 }
 
-int CSerializationBuf::GetUseSize()
+int CNetServerSerializationBuf::GetUseSize()
 {
-	return m_iWrite - m_iRead - df_HEADER_SIZE;
+	return m_iWrite - m_iRead;// - df_HEADER_SIZE;
 }
 
-int CSerializationBuf::GetFreeSize()
+int CNetServerSerializationBuf::GetFreeSize()
 {
 	return m_iSize - m_iWrite;
 }
 
-int CSerializationBuf::GetAllUseSize()
+int CNetServerSerializationBuf::GetAllUseSize()
 {
 	return m_iWriteLast - m_iRead;
 }
 
-void CSerializationBuf::SetWriteZero()
+void CNetServerSerializationBuf::SetWriteZero()
 {
 	m_iWrite = 0;
 }
 
-int CSerializationBuf::GetLastWrite()
+int CNetServerSerializationBuf::GetLastWrite()
 {
 	return m_iWriteLast;
 }
 
-void CSerializationBuf::WritePtrSetHeader()
+void CNetServerSerializationBuf::WritePtrSetHeader()
 {
 	m_iWriteLast = m_iWrite;
 	m_iWrite = 0;
 }
 
-void CSerializationBuf::WritePtrSetLast()
+void CNetServerSerializationBuf::WritePtrSetLast()
 {
 	m_iWrite = m_iWriteLast;
 }
 
 // 헤더 순서
 // Code(1) Length(2) Random XOR Code(1) CheckSum(1)
-void CSerializationBuf::Encode()
+void CNetServerSerializationBuf::Encode()
 {
 	// 헤더 코드 삽입
 	int NowWrite = 0;
 	char *(&pThisBuffer) = m_pSerializeBuffer;
-	pThisBuffer[NowWrite] = df_HEADER_CODE;
+	pThisBuffer[NowWrite] = m_byHeaderCode;
 	++NowWrite;
 
 	// 페이로드 크기 삽입
@@ -248,7 +252,7 @@ void CSerializationBuf::Encode()
 	NowWrite += 2;
 
 	// 난수 XOR 코드 생성
-	BYTE RandCode = (BYTE)(rand() & 255) ^ df_XOR_CODE;
+	BYTE RandCode = (BYTE)((rand() & 255) ^ m_byXORCode);
 
 	// 체크섬 생성 및 페이로드와 체크섬 암호화
 	WORD PayloadSum = 0;
@@ -264,11 +268,12 @@ void CSerializationBuf::Encode()
 	pThisBuffer[df_CHECKSUM_CODE_LOCATION] = CheckSum;
 
 	m_iWrite = df_HEADER_SIZE;
+	m_bIsEncoded = TRUE;
 }
 
 // 헤더 순서
 // Code(1) Length(2) Random XOR Code(1) CheckSum(1)
-bool CSerializationBuf::Decode(/*char *pDecodingStartPtr*/)
+bool CNetServerSerializationBuf::Decode()
 {
 	char *(&pThisBuffer) = m_pSerializeBuffer;
 	WORD PayloadSum = 0;
@@ -292,99 +297,92 @@ bool CSerializationBuf::Decode(/*char *pDecodingStartPtr*/)
 // static
 //////////////////////////////////////////////////////////////////
 
-CSerializationBuf* CSerializationBuf::Alloc()
+CNetServerSerializationBuf* CNetServerSerializationBuf::Alloc()
 {
-	return CSerializationBuf::pMemoryPool->Alloc();
+	CNetServerSerializationBuf *pBuf = pMemoryPool->Alloc();
+	return pBuf;
 }
 
-void CSerializationBuf::AddRefCount(CSerializationBuf* AddRefBuf)
+void CNetServerSerializationBuf::AddRefCount(CNetServerSerializationBuf* AddRefBuf)
 {
 	InterlockedIncrement(&AddRefBuf->m_iRefCount);
 }
 
-void CSerializationBuf::Free(CSerializationBuf* DeleteBuf)
+void CNetServerSerializationBuf::Free(CNetServerSerializationBuf* DeleteBuf)
 {
-	UINT RefCnt = InterlockedDecrement(&DeleteBuf->m_iRefCount);
-	if (RefCnt == 0)
+	if (InterlockedDecrement(&DeleteBuf->m_iRefCount) == 0)
 	{
-		//DeleteBuf->Init();
 		DeleteBuf->m_byError = 0;
+		DeleteBuf->m_bIsEncoded = FALSE;
 		DeleteBuf->m_iWrite = df_HEADER_SIZE;
-		DeleteBuf->m_iRead = 0;
+		DeleteBuf->m_iRead = df_HEADER_SIZE;
 		DeleteBuf->m_iWriteLast = 0;
 		DeleteBuf->m_iUserWriteBefore = df_HEADER_SIZE;
 		DeleteBuf->m_iRefCount = 1;
-		CSerializationBuf::pMemoryPool->Free(DeleteBuf);
+		CNetServerSerializationBuf::pMemoryPool->Free(DeleteBuf);
 	}
 }
 
-void CSerializationBuf::ChunkFreeForcibly()
+void CNetServerSerializationBuf::ChunkFreeForcibly()
 {
-	CSerializationBuf::pMemoryPool->ChunkFreeForcibly();
+	CNetServerSerializationBuf::pMemoryPool->ChunkFreeForcibly();
 }
 
 //////////////////////////////////////////////////////////////////
 // Operator <<
 //////////////////////////////////////////////////////////////////
 
-CSerializationBuf &CSerializationBuf::operator<<(int Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(int Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(WORD Input)
-{
-	*((short*)(&m_pSerializeBuffer[m_iWrite])) = *(short*)&Input;
-	m_iWrite += sizeof(WORD);
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator<<(DWORD Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(WORD Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(UINT Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(DWORD Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(UINT64 Input)
-{
-	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&Input;
-	m_iWrite += sizeof(UINT64);
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator<<(char Input)
-{
-	*((char*)(&m_pSerializeBuffer[m_iWrite])) = *(char*)&Input;
-	m_iWrite += sizeof(char);
-	//WriteBuffer((char*)&Input, sizeof(Input));
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator<<(BYTE Input)
-{
-	*((char*)(&m_pSerializeBuffer[m_iWrite])) = *(char*)&Input;
-	m_iWrite += sizeof(char);
-	//WriteBuffer((char*)&Input, sizeof(Input));
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator<<(float Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(UINT Input)
 {
 	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator<<(__int64 Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(UINT64 Input)
 {
-	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&Input;
-	m_iWrite += sizeof(__int64);
+	WriteBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(char Input)
+{
+	WriteBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(BYTE Input)
+{
+	WriteBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(float Input)
+{
+	WriteBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator<<(__int64 Input)
+{
+	WriteBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
@@ -392,59 +390,56 @@ CSerializationBuf &CSerializationBuf::operator<<(__int64 Input)
 // Operator >>
 //////////////////////////////////////////////////////////////////
 
-CSerializationBuf &CSerializationBuf::operator>>(int &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(int &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(WORD &Input)
-{
-	*((short*)(&Input)) = *(short*)&m_pSerializeBuffer[m_iRead];
-	m_iRead += sizeof(WORD);
-	return *this;
-}
-
-CSerializationBuf &CSerializationBuf::operator>>(DWORD &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(WORD &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(char &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(DWORD &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(BYTE &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(char &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(float &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(BYTE &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(UINT &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(float &Input)
 {
 	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(UINT64 &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(UINT &Input)
 {
-	*((long long*)(&Input)) = *(long long*)&m_pSerializeBuffer[m_iRead];
-	m_iRead += sizeof(UINT64);
+	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }
 
-CSerializationBuf &CSerializationBuf::operator>>(__int64 &Input)
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(UINT64 &Input)
 {
-	*((long long*)(&Input)) = *(long long*)&m_pSerializeBuffer[m_iRead];
-	m_iRead += sizeof(__int64);
+	ReadBuffer((char*)&Input, sizeof(Input));
+	return *this;
+}
+
+CNetServerSerializationBuf &CNetServerSerializationBuf::operator>>(__int64 &Input)
+{
+	ReadBuffer((char*)&Input, sizeof(Input));
 	return *this;
 }

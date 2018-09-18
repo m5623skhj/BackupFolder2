@@ -1,17 +1,15 @@
-#include "PreComfile.h"
+#include "PreCompile.h"
 #include "Ringbuffer.h"
 
 CRingbuffer::CRingbuffer() : m_iFront(0), m_iRear(0), m_iSize(DEFAULT_BUFFERMAX)
 {
 	Initialize(DEFAULT_BUFFERMAX);
-	//InitializeCriticalSection(&m_CriticalSection);
 	InitializeSRWLock(&m_SRWLock);
 }
 
 CRingbuffer::~CRingbuffer()
 {
 	delete[] m_pBuffer;
-	//DeleteCriticalSection(&m_CriticalSection);
 }
 
 void CRingbuffer::Initialize(int BufferSize)
@@ -253,8 +251,7 @@ void CRingbuffer::RemoveData(int Size)
 	int RemoveSize = Size + m_iRear;
 	if (RemoveSize >= m_iSize)
 	{
-		RemoveSize = RemoveSize - m_iSize;
-		m_iRear = RemoveSize;
+		m_iRear = RemoveSize - m_iSize;
 	}
 	else
 	{
@@ -267,7 +264,7 @@ void CRingbuffer::MoveWritePos(int Size)
 	int MovePos = Size + m_iFront;
 	if (MovePos >= m_iSize)
 	{
-		m_iFront = 0;
+		m_iFront = MovePos - m_iSize;
 	}
 	else
 	{

@@ -1,7 +1,5 @@
 #pragma once
-#include "NetServer.h"
 #include "LockFreeMemoryPool.h"
-#include <Windows.h>
 
 #define dfDEFAULTSIZE		1024
 #define BUFFFER_MAX			10000
@@ -15,20 +13,24 @@
 // 혹은 GetLastWrite() 를 사용하여 사용자가 쓴 마지막 값을 사이즈로 넘겨줌
 #define df_HEADER_SIZE		5
 
-#define NUM_OF_CHUNK		30
+#define NUM_OF_CHUNK		10
 
-#define df_HEADER_CODE		(BYTE)0x11
+//#define df_HEADER_CODE		(BYTE)0x11
 // 헤더에 들어갈 암호화용 XOR 고정 코드
 // 고정 코드 2개에 대하여 XOR 한 코드임
-#define df_XOR_CODE			(BYTE)0x41
+//#define df_XOR_CODE			(BYTE)0x41
 
 #define df_RAND_CODE_LOCATION		 3
 #define df_CHECKSUM_CODE_LOCATION	 4
 
-class CSerializationBuf
+class CNetServer;
+class CLanClient;
+
+class CNetServerSerializationBuf
 {
 private:
 	BYTE		m_byError;
+	BOOL		m_bIsEncoded;
 	int			m_iWrite;
 	int			m_iRead;
 	int			m_iSize;
@@ -38,9 +40,14 @@ private:
 	UINT		m_iRefCount;
 	char		*m_pSerializeBuffer;
 	//static CLockFreeMemoryPool<CSerializationBuf>	*pMemoryPool;
-	static CTLSMemoryPool<CSerializationBuf>		*pMemoryPool;
+
+	static BYTE												m_byHeaderCode;
+	static BYTE												m_byXORCode;
+
+	static CTLSMemoryPool<CNetServerSerializationBuf>		*pMemoryPool;
 
 	friend CNetServer;
+	friend CLanClient;
 private:
 	void Initialize(int BufferSize);
 
@@ -56,28 +63,29 @@ private:
 	int GetLastWrite();
 
 	char *GetBufferPtr();
-	char *GetReadBufferPtr();
-	char *GetWriteBufferPtr();
-
-	void WriteBuffer(char *pData, int Size);
-	void ReadBuffer(char *pDest, int Size);
-	void PeekBuffer(char *pDest, int Size);
-
+	
 	// 원하는 길이만큼 읽기 위치에서 삭제
 	void RemoveData(int Size);
 
 	void Encode();
-	bool Decode(/*char *pDecodingStartPtr*/);
+	bool Decode();
 
 	// 서버 종료 할 때만 사용 할 것
 	static void ChunkFreeForcibly();
 
 	int GetAllUseSize();
 public:
-	CSerializationBuf();
-	~CSerializationBuf();
+	CNetServerSerializationBuf();
+	~CNetServerSerializationBuf();
 
 	void Init();
+
+	void WriteBuffer(char *pData, int Size);
+	void ReadBuffer(char *pDest, int Size);
+	void PeekBuffer(char *pDest, int Size);
+
+	char *GetReadBufferPtr();
+	char *GetWriteBufferPtr();
 
 	// 새로 버퍼크기를 할당하여 이전 데이터를 옮김
 	void Resize(int Size);
@@ -102,29 +110,29 @@ public:
 	int GetUseSize();
 	int GetFreeSize();
 
-	static CSerializationBuf* Alloc();
-	static void				  AddRefCount(CSerializationBuf* AddRefBuf);
-	static void				  Free(CSerializationBuf* DeleteBuf);
+	static CNetServerSerializationBuf*	Alloc();
+	static void							AddRefCount(CNetServerSerializationBuf* AddRefBuf);
+	static void							Free(CNetServerSerializationBuf* DeleteBuf);
 
 
-	CSerializationBuf& operator<<(int Input);
-	CSerializationBuf& operator<<(WORD Input);
-	CSerializationBuf& operator<<(DWORD Input);
-	CSerializationBuf& operator<<(char Input);
-	CSerializationBuf& operator<<(BYTE Input);
-	CSerializationBuf& operator<<(float Input);
-	CSerializationBuf& operator<<(UINT Input);
-	CSerializationBuf& operator<<(UINT64 Input);
-	CSerializationBuf& operator<<(__int64 Input);
+	CNetServerSerializationBuf& operator<<(int Input);
+	CNetServerSerializationBuf& operator<<(WORD Input);
+	CNetServerSerializationBuf& operator<<(DWORD Input);
+	CNetServerSerializationBuf& operator<<(char Input);
+	CNetServerSerializationBuf& operator<<(BYTE Input);
+	CNetServerSerializationBuf& operator<<(float Input);
+	CNetServerSerializationBuf& operator<<(UINT Input);
+	CNetServerSerializationBuf& operator<<(UINT64 Input);
+	CNetServerSerializationBuf& operator<<(__int64 Input);
 
-	CSerializationBuf& operator>>(int &Input);
-	CSerializationBuf& operator>>(WORD &Input);
-	CSerializationBuf& operator>>(DWORD &Input);
-	CSerializationBuf& operator>>(char &Input);
-	CSerializationBuf& operator>>(BYTE &Input);
-	CSerializationBuf& operator>>(float &Input);
-	CSerializationBuf& operator>>(UINT &Input);
-	CSerializationBuf& operator>>(UINT64 &Input);
-	CSerializationBuf& operator>>(__int64 &Input);
+	CNetServerSerializationBuf& operator>>(int &Input);
+	CNetServerSerializationBuf& operator>>(WORD &Input);
+	CNetServerSerializationBuf& operator>>(DWORD &Input);
+	CNetServerSerializationBuf& operator>>(char &Input);
+	CNetServerSerializationBuf& operator>>(BYTE &Input);
+	CNetServerSerializationBuf& operator>>(float &Input);
+	CNetServerSerializationBuf& operator>>(UINT &Input);
+	CNetServerSerializationBuf& operator>>(UINT64 &Input);
+	CNetServerSerializationBuf& operator>>(__int64 &Input);
 };
 

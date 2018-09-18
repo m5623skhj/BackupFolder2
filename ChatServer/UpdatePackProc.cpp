@@ -1,4 +1,4 @@
-#include "PreComfile.h"
+#include "PreCompile.h"
 #include "ChatServer.h"
 #include "NetServerSerializeBuffer.h"
 #include "CommonProtocol.h"
@@ -17,6 +17,7 @@ bool CChatServer::PacketProc_PlayerJoin(UINT64 SessionID)
 	NewClient.SectorY = dfINIT_SECTOR_VALUE;
 	NewClient.bIsLoginUser = FALSE;
 	NewClient.uiAccountNO = dfACCOUNT_INIT_VALUE;
+	NewClient.uiBeforeRecvTime = m_uiHeartBeatTime;
 
 	m_UserSessionMap.insert({ SessionID, &NewClient });
 
@@ -29,6 +30,7 @@ bool CChatServer::PacketProc_PlayerLeave(UINT64 SessionID)
 	if (&LeaveClient == m_UserSessionMap.end()->second)
 		return false;
 
+	m_UserSessionKeyMap.erase(SessionID);
 	m_UserSessionMap.erase(SessionID);
 	if (LeaveClient.SectorX >= dfMAX_SECTOR_X || LeaveClient.SectorY >= dfMAX_SECTOR_Y)
 	{
@@ -40,13 +42,30 @@ bool CChatServer::PacketProc_PlayerLeave(UINT64 SessionID)
 	{
 		st_Error Err;
 		Err.GetLastErr = 0;
-		Err.NetServerErr = NOT_IN_USER_SECTORMAP_ERR;
+		Err.ServerErr = NOT_IN_USER_SECTOR_MAP_ERR;
 		OnError(&Err);
 		m_pUserMemoryPool->Free(&LeaveClient);
 		return false;
 	}
 
 	m_pUserMemoryPool->Free(&LeaveClient);
+	return true;
+}
+
+bool CChatServer::PacketProc_PlayerLoginFromLoginServer(CNetServerSerializationBuf *pRecvPacket)
+{   
+	UINT64 AccountNo, SessionKeyAddress;
+	st_SessionKey *pSessionKey;
+
+	*pRecvPacket >> AccountNo >> SessionKeyAddress;
+	pSessionKey = (st_SessionKey*)SessionKeyAddress;
+
+	if ((m_UserSessionKeyMap.insert({ AccountNo, pSessionKey })).second == false)
+	{
+		m_pSessionKeyMemoryPool->Free(pSessionKey);
+		return false;
+	}
+
 	return true;
 }
 
@@ -59,7 +78,7 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 		st_Error err;
 		err.GetLastErr = 0;
 		err.Line = __LINE__;
-		err.NetServerErr = SERIALIZEBUF_SIZE_ERR;
+		err.ServerErr = SERIALIZEBUF_SIZE_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
 		return false;
@@ -72,7 +91,7 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 		st_Error err;
 		err.GetLastErr = 0;
 		err.Line = __LINE__;
-		err.NetServerErr = SECTOR_RANGE_ERR;
+		err.ServerErr = SECTOR_RANGE_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
 		return false;
@@ -83,10 +102,9 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 	{
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = NOT_IN_USER_MAP_ERR;
+		err.ServerErr = NOT_IN_USER_MAP_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
-		// 처리 해 줄게 무엇이 있는가?
 		return false;
 	}
 
@@ -96,10 +114,9 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 		{
 			st_Error err;
 			err.Line = __LINE__;
-			err.NetServerErr = NOT_IN_USER_SECTORMAP_ERR;
+			err.ServerErr = NOT_IN_USER_SECTOR_MAP_ERR;
 			OnError(&err);
 			DisConnect(SessionID);
-			// 처리 해 줄게 무엇이 있는가?
 			return false;
 		}
 	}
@@ -108,10 +125,9 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 	{
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = NOT_LOGIN_USER_ERR;
+		err.ServerErr = NOT_LOGIN_USER_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
-		// 처리 해 줄게 무엇이 있는가?
 		return false;
 	}
 
@@ -119,12 +135,13 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 	{
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = INCORRECT_ACCOUNTNO;
+		err.ServerErr = INCORRECT_ACCOUNTNO;
 		OnError(&err);
 		DisConnect(SessionID);
-		// 처리 해 줄게 무엇이 있는가?
 		return false;
 	}
+
+	User.uiBeforeRecvTime = m_uiHeartBeatTime;
 
 	User.SectorX = SectorX;
 	User.SectorY = SectorY;
@@ -148,7 +165,7 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 		st_Error err;
 		err.GetLastErr = 0;
 		err.Line = __LINE__;
-		err.NetServerErr = SERIALIZEBUF_SIZE_ERR;
+		err.ServerErr = SERIALIZEBUF_SIZE_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
 		return false;
@@ -160,7 +177,7 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 		st_Error err;
 		err.GetLastErr = 0;
 		err.Line = __LINE__;
-		err.NetServerErr = SERIALIZEBUF_SIZE_ERR;
+		err.ServerErr = SERIALIZEBUF_SIZE_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
 		return false;
@@ -171,10 +188,9 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 	{
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = NOT_IN_USER_MAP_ERR;
+		err.ServerErr = NOT_IN_USER_MAP_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
-		// 처리 해 줄게 무엇이 있는가?
 		return false;
 	}
 
@@ -182,10 +198,9 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 	{
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = NOT_LOGIN_USER_ERR;
+		err.ServerErr = NOT_LOGIN_USER_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
-		// 처리 해 줄게 무엇이 있는가?
 		return false;
 	}
 
@@ -193,10 +208,9 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 	{
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = INCORRECT_ACCOUNTNO;
+		err.ServerErr = INCORRECT_ACCOUNTNO;
 		OnError(&err);
 		DisConnect(SessionID);
-		// 처리 해 줄게 무엇이 있는가?
 		return false;
 	}
 
@@ -204,12 +218,13 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 	{
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = SECTOR_RANGE_ERR;
+		err.ServerErr = SECTOR_RANGE_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
-		// 처리 해 줄게 무엇이 있는가?
 		return false;
 	}
+
+	User.uiBeforeRecvTime = m_uiHeartBeatTime;
 
 	WORD Type = en_PACKET_CS_CHAT_RES_MESSAGE;
 
@@ -220,7 +235,6 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 
 	SendBuf.WriteBuffer(pRecvPacket->GetReadBufferPtr(), MessageLength);
 	BroadcastSectorAroundAll(User.SectorX, User.SectorY, &SendBuf);
-	//SendPacket(SessionID, &SendBuf);
 	return true;
 }
 
@@ -238,7 +252,7 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 		st_Error err;
 		err.GetLastErr = 0;
 		err.Line = __LINE__;
-		err.NetServerErr = SERIALIZEBUF_SIZE_ERR;
+		err.ServerErr = SERIALIZEBUF_SIZE_ERR;
 		OnError(&err);
 		DisConnect(SessionID);
 		return false;
@@ -259,9 +273,8 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 		SendBuf << Type << Status << AccountNo;
 		st_Error err;
 		err.Line = __LINE__;
-		err.NetServerErr = NOT_IN_USER_MAP_ERR;
+		err.ServerErr = NOT_IN_USER_MAP_ERR;
 		OnError(&err);
-		// 처리 해 줄게 무엇이 있는가?
 		SendPacket(SessionID, &SendBuf);
 		DisConnect(SessionID);
 		return false;
@@ -270,10 +283,29 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 	User.uiAccountNO = AccountNo;
 	RecvPacket.ReadBuffer((char*)&User.szID, sizeof(WCHAR) * dfID_NICKNAME_LENGTH);
 	RecvPacket.ReadBuffer((char*)&User.SessionKey, sizeof(User.SessionKey));
+	
+	st_SessionKey *pSessionKey = m_UserSessionKeyMap.find(AccountNo)->second;
+	if(memcmp(pSessionKey, m_UserSessionKeyMap.find(AccountNo)->second, dfSESSIONKEY_SIZE) != 0)
+	//if (pSessionKey == m_UserSessionKeyMap.end()->second)
+	{
+		m_iNumOfSessionKeyMiss++;
+		Status = FALSE;
+		SendBuf << Type << Status << AccountNo;
+		st_Error err;
+		err.Line = __LINE__;
+		err.ServerErr = NOT_IN_USER_ACCOUNTMAP_ERR;
+		OnError(&err);
+		SendPacket(SessionID, &SendBuf);
+		DisConnect(SessionID);
+		return false;
+	}
+
+	m_pSessionKeyMemoryPool->Free(pSessionKey);
 
 	SendBuf << Type  << Status << AccountNo;
 	
 	User.bIsLoginUser = TRUE;
+	User.uiBeforeRecvTime = m_uiHeartBeatTime;
 
 	SendPacket(SessionID, &SendBuf);
 	return true;

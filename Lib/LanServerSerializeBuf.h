@@ -1,5 +1,5 @@
 #pragma once
-#include "LanServer.h"
+//#include "LanServer.h"
 #include "LockFreeMemoryPool.h"
 #include <Windows.h>
 
@@ -7,20 +7,24 @@
 #define BUFFFER_MAX			10000
 
 // Header 의 크기를 결정함
-// 프로그램마다 유동적임
-// 헤더 크기에 따라 수정할 것
-// 또한 내부에서 반드시 
+// 내부에서 반드시 
 // WritePtrSetHeader() 와 WritePtrSetLast() 를 사용함으로써
 // 헤더 시작 부분과 페이로드 마지막 부분으로 포인터를 옮겨줘야 함
 // 혹은 GetLastWrite() 를 사용하여 사용자가 쓴 마지막 값을 사이즈로 넘겨줌
 #define HEADER_SIZE			2
 
-#define NUM_OF_CHUNK		30
+#define NUM_OF_CHUNK		5
+
+class CLanServer;
+class CLanClient;
 
 class CSerializationBuf
 {
 private:
+	BYTE		m_byDelCnt = 0;
+
 	BYTE		m_byError;
+	BOOL		m_bHeaderInputted;
 	int			m_iWrite;
 	int			m_iRead;
 	int			m_iSize;
@@ -33,6 +37,7 @@ private:
 	static CTLSMemoryPool<CSerializationBuf>		*pMemoryPool;
 
 	friend CLanServer;
+	friend CLanClient;
 private:
 	void Initialize(int BufferSize);
 
@@ -51,8 +56,6 @@ private:
 	char *GetReadBufferPtr();
 	char *GetWriteBufferPtr();
 
-	void WriteBuffer(char *pData, int Size);
-	void ReadBuffer(char *pDest, int Size);
 	void PeekBuffer(char *pDest, int Size);
 
 	// 원하는 길이만큼 읽기 위치에서 삭제
@@ -80,6 +83,8 @@ public:
 	// 쓰기 포인터를 가장 처음으로 이동시킴
 	void MoveWritePosBeforeCallThisPos();
 
+	void WriteBuffer(char *pData, int Size);
+	void ReadBuffer(char *pDest, int Size);
 
 	// --------------- 반환값 ---------------
 	// 0 : 정상처리 되었음

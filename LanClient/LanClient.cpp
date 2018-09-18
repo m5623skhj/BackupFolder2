@@ -4,8 +4,7 @@
 #include "CrashDump.h"
 #include "LanServerSerializeBuf.h"
 #include "Profiler.h"
-
-extern CCrashDump g_dump;
+#include "Log.h"
 
 CLanClient::CLanClient()
 {
@@ -17,24 +16,23 @@ CLanClient::~CLanClient()
 
 }
 
-bool CLanClient::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle)
+bool CLanClient::Start(const WCHAR *szOptionFileName)
 {
-	if (!LanClientOptionParsing())
+	if (!LanClientOptionParsing(szOptionFileName))
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::PARSING_ERR;
+		Error.ServerErr = SERVER_ERR::PARSING_ERR;
 		return false;
 	}
 
-	memcpy(m_IP, IP, sizeof(m_IP));
 	int retval;
 	WSADATA Wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &Wsa))
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::WSASTARTUP_ERR;
+		Error.ServerErr = SERVER_ERR::WSASTARTUP_ERR;
 		OnError(&Error);
 		return false;
 	}
@@ -44,62 +42,65 @@ bool CLanClient::Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool 
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::LISTEN_SOCKET_ERR;
+		Error.ServerErr = SERVER_ERR::LISTEN_SOCKET_ERR;
 		OnError(&Error);
 		return false;
 	}
 
 	SOCKADDR_IN serveraddr;
 	ZeroMemory(&serveraddr, sizeof(serveraddr));
-	InetPton(AF_INET, dfSERVER_IP, &serveraddr.sin_addr);
+	InetPton(AF_INET, m_IP, &serveraddr.sin_addr);
 	serveraddr.sin_family = AF_INET;
-	serveraddr.sin_port = htons(dfSERVER_PORT);
+	serveraddr.sin_port = htons(m_wPort);
 
 	if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr)) == SOCKET_ERROR)
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::LISTEN_BIND_ERR;
+		Error.ServerErr = SERVER_ERR::LISTEN_BIND_ERR;
 		OnError(&Error);
 		return false;
 	}
 
-	retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&IsNagle, sizeof(int));
+	m_RecvIOData.RingBuffer.Resize(32768);
+
+	retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&m_bIsNagleOn, sizeof(int));
 	if (retval == SOCKET_ERROR)
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::SETSOCKOPT_ERR;
+		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
 	}
 
 	ZeroMemory(&m_RecvIOData.Overlapped, sizeof(OVERLAPPED));
 	ZeroMemory(&m_SendIOData.Overlapped, sizeof(OVERLAPPED));
 
-	m_pWorkerThreadHandle = new HANDLE[NumOfWorkerThread];
+	m_pWorkerThreadHandle = new HANDLE[m_byNumOfWorkerThread];
 	// static 함수에서 LanClient 객체를 접근하기 위하여 this 포인터를 인자로 넘김
-	for (int i = 0; i < NumOfWorkerThread; i++)
+	for (int i = 0; i < m_byNumOfWorkerThread; i++)
 		m_pWorkerThreadHandle[i] = (HANDLE)_beginthreadex(NULL, 0, WorkerThread, this, 0, NULL);
 	if (m_pWorkerThreadHandle == 0)
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::BEGINTHREAD_ERR;
+		Error.ServerErr = SERVER_ERR::BEGINTHREAD_ERR;
 		OnError(&Error);
 		return false;
 	}
-	m_byNumOfWorkerThread = NumOfWorkerThread;
+	m_byNumOfWorkerThread = m_byNumOfWorkerThread;
 
 	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
 	if (m_hWorkerIOCP == NULL)
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::WORKERIOCP_NULL_ERR;
+		Error.ServerErr = SERVER_ERR::WORKERIOCP_NULL_ERR;
 		return false;
 	}
 	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, m_sock, 0);
 
 	m_IOCount = 1;
+	m_wNumOfReconnect = 0;
 	RecvPost();
 	OnConnectionComplete();
 
@@ -120,7 +121,7 @@ void CLanClient::Stop()
 	WSACleanup();
 }
 
-bool CLanClient::LanClientOptionParsing()
+bool CLanClient::LanClientOptionParsing(const WCHAR *szOptionFileName)
 {
 	_wsetlocale(LC_ALL, L"Korean");
 
@@ -128,7 +129,7 @@ bool CLanClient::LanClientOptionParsing()
 	WCHAR cBuffer[BUFFER_MAX];
 
 	FILE *fp;
-	_wfopen_s(&fp, L"LanClientOption.txt", L"rt, ccs=UNICODE");
+	_wfopen_s(&fp, szOptionFileName, L"rt, ccs=UNICODE");
 
 	int iJumpBOM = ftell(fp);
 	fseek(fp, 0, SEEK_END);
@@ -141,12 +142,64 @@ bool CLanClient::LanClientOptionParsing()
 	cBuffer[iFileSize - iAmend] = '\0';
 	WCHAR *pBuff = cBuffer;
 
-	int HeaderCode;
-
-	if (!parser.GetValue_Int(pBuff, L"SerializeBuffer", L"HeaderCode", &HeaderCode))
+	if (!parser.GetValue_String(pBuff, L"LANCLIENT", L"SERVER_IP", m_IP))
+		return false;
+	if (!parser.GetValue_Short(pBuff, L"LANCLIENT", L"SERVER_PORT", (short*)&m_wPort))
+		return false;
+	if (!parser.GetValue_Byte(pBuff, L"LANCLIENT", L"WORKER_THREAD", &m_byNumOfWorkerThread))
+		return false;
+	if (!parser.GetValue_Byte(pBuff, L"LANCLIENT", L"USE_IOCPWORKER", &m_byNumOfUsingWorkerThread))
+		return false;
+	if (!parser.GetValue_Byte(pBuff, L"LANCLIENT", L"NAGLE_ON", (BYTE*)&m_bIsNagleOn))
 		return false;
 
-	CSerializationBuf::byHeader = (BYTE)HeaderCode;
+	return true;
+}
+
+bool CLanClient::ReleaseSession()
+{
+	if (InterlockedCompareExchange64((LONG64*)&m_IOCount, 0, df_RELEASE_VALUE) != df_RELEASE_VALUE)
+		return false;
+
+	int SendBufferRestSize = m_SendIOData.lBufferCount;
+	int Rest = m_SendIOData.SendQ.GetRestSize();
+	// SendPost 에서 옮겨졌으나 보내지 못한 직렬화 버퍼들을 반환함
+	for (int i = 0; i < SendBufferRestSize; ++i)
+		CSerializationBuf::Free(pSeirializeBufStore[i]);
+
+	// 큐에서 아직 꺼내오지 못한 직렬화 버퍼가 있다면 해당 직렬화 버퍼들을 반환함
+	if (Rest > 0)
+	{
+		CSerializationBuf *DeleteBuf;
+		for (int i = 0; i < Rest; ++i)
+		{
+			m_SendIOData.SendQ.Dequeue(&DeleteBuf);
+			CSerializationBuf::Free(DeleteBuf);
+		}
+	}
+
+
+	SOCKADDR_IN serveraddr;
+	ZeroMemory(&serveraddr, sizeof(serveraddr));
+	InetPton(AF_INET, m_IP, &serveraddr.sin_addr);
+	serveraddr.sin_family = AF_INET;
+	serveraddr.sin_port = htons(m_wPort);
+
+	int ConnectCnt = 0;
+
+	while (1)
+	{
+		if(connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr) != SOCKET_ERROR))
+			break;
+		else if (ConnectCnt >= dfRECONNECT_MAX)
+		{
+			_LOG(LOG_LEVEL::LOG_SYSTEM, L"SYSTEM", L" : Reconnect Over Err : %d\n", GetLastError());
+			g_Dump.Crash();
+		}
+	}
+
+	++m_wNumOfReconnect;
+	++m_IOCount;
 
 	return true;
 }
@@ -158,7 +211,6 @@ UINT CLanClient::Worker()
 	DWORD Transferred;
 	SOCKET *pSession;
 	LPOVERLAPPED lpOverlapped;
-	ULONGLONG m_IOCount;
 	OVERLAPPEDIODATA &RecvIOData = m_RecvIOData;
 	OVERLAPPED_SEND_IO_DATA	&SendIOData = m_SendIOData;
 	srand((UINT)&retval);
@@ -176,7 +228,7 @@ UINT CLanClient::Worker()
 		{
 			st_Error Error;
 			Error.GetLastErr = WSAGetLastError();
-			Error.LanClientErr = LANCLIENT_ERR::OVERLAPPED_NULL_ERR;
+			Error.ServerErr = SERVER_ERR::OVERLAPPED_NULL_ERR;
 			OnError(&Error);
 			continue;
 		}
@@ -193,13 +245,13 @@ UINT CLanClient::Worker()
 			if (lpOverlapped == &RecvIOData.Overlapped)
 			{
 				// 서버가 종료함
-				// 뭘 할게 있나?
+				// 재접속 필요
 				if (Transferred == 0)
 				{
 					// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
 					m_IOCount = InterlockedDecrement(&m_IOCount);
-					//if (m_IOCount == 0)
-					//	ReleaseSession(pSession);
+					if (m_IOCount == 0)
+						printf("A");
 
 					continue;
 				}
@@ -210,31 +262,20 @@ UINT CLanClient::Worker()
 				while (RingBufferRestSize > HEADER_SIZE)
 				{
 					CSerializationBuf &RecvSerializeBuf = *CSerializationBuf::Alloc();
-					RecvSerializeBuf.m_iWrite = 0;
-					RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, HEADER_SIZE);
-					// Code Size 1 + PayloadLength 2
-					RecvSerializeBuf.m_iWrite += HEADER_SIZE;
-
-					BYTE Code;
+					RecvSerializeBuf.m_iRead = 0;
+					retval = RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, HEADER_SIZE);
+					// PayloadLength 2
 					WORD PayloadLength;
-					RecvSerializeBuf >> Code >> PayloadLength;
+					RecvSerializeBuf >> PayloadLength;
+					if (PayloadLength == 0)
+						printf("A");
 
-					if (Code != CSerializationBuf::byHeader)
-					{
-						CSerializationBuf::Free(&RecvSerializeBuf);
-						InterlockedDecrement(&m_IOCount);
-						st_Error Err;
-						Err.GetLastErr = 0;
-						Err.LanClientErr = HEADER_CODE_ERR;
-						OnError(&Err);
-						break;
-					}
 					if (RecvIOData.RingBuffer.GetUseSize() < PayloadLength + HEADER_SIZE)
 					{
 						CSerializationBuf::Free(&RecvSerializeBuf);
 						break;
 					}
-					RecvIOData.RingBuffer.RemoveData(HEADER_SIZE);
+					RecvIOData.RingBuffer.RemoveData(retval);
 
 					retval = RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
 					RecvSerializeBuf.m_iWrite += retval;
@@ -285,8 +326,8 @@ UINT CLanClient::Worker()
 		if (cPostRetval == POST_RETVAL_ERR_SESSION_DELETED)
 			continue;
 		m_IOCount = InterlockedDecrement(&m_IOCount);
-		//if (m_IOCount == 0)
-		//	ReleaseSession(pSession);
+		if (m_IOCount == 0)
+			printf("A");
 	}
 
 	CSerializationBuf::ChunkFreeForcibly();
@@ -302,14 +343,13 @@ UINT __stdcall CLanClient::WorkerThread(LPVOID pNetServer)
 char CLanClient::RecvPost()
 {
 	OVERLAPPEDIODATA &RecvIOData = m_RecvIOData;
-	ULONGLONG m_IOCount;
 	if (RecvIOData.RingBuffer.IsFull())
 	{
 		// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
 		m_IOCount = InterlockedDecrement(&m_IOCount);
 		if (m_IOCount == 0)
 		{
-			//ReleaseSession(pSession);
+			printf("A");
 			return POST_RETVAL_ERR_SESSION_DELETED;
 		}
 		return POST_RETVAL_ERR;
@@ -340,12 +380,12 @@ char CLanClient::RecvPost()
 			m_IOCount = InterlockedDecrement(&m_IOCount);
 			if (m_IOCount == 0)
 			{
-				//ReleaseSession(pSession);
+				printf("A");
 				return POST_RETVAL_ERR_SESSION_DELETED;
 			}
 			st_Error Error;
 			Error.GetLastErr = GetLastErr;
-			Error.LanClientErr = LANCLIENT_ERR::WSARECV_ERR;
+			Error.ServerErr = SERVER_ERR::WSARECV_ERR;
 			OnError(&Error);
 			return POST_RETVAL_ERR;
 		}
@@ -359,7 +399,7 @@ bool CLanClient::SendPacket(CSerializationBuf *pSerializeBuf)
 	{
 		st_Error Error;
 		Error.GetLastErr = WSAGetLastError();
-		Error.LanClientErr = LANCLIENT_ERR::SERIALIZEBUF_NULL_ERR;
+		Error.ServerErr = SERVER_ERR::SERIALIZEBUF_NULL_ERR;
 		OnError(&Error);
 		return false;
 	}
@@ -377,8 +417,9 @@ bool CLanClient::SendPacket(CSerializationBuf *pSerializeBuf)
 	WORD PayloadSize = pSerializeBuf->GetUseSize();
 	pSerializeBuf->m_iWriteLast = pSerializeBuf->m_iWrite;
 	pSerializeBuf->m_iWrite = 0;
-	*pSerializeBuf << CSerializationBuf::byHeader << PayloadSize;
-
+	pSerializeBuf->m_iRead = 0;
+	*pSerializeBuf << PayloadSize;
+	
 	m_SendIOData.SendQ.Enqueue(pSerializeBuf);
 	SendPost();
 
@@ -402,7 +443,6 @@ char CLanClient::SendPost()
 		if (InterlockedCompareExchange(&SendIOData.IOMode, SENDING, NONSENDING))
 			return true;
 
-		ULONGLONG m_IOCount;
 		int UseSize = SendIOData.SendQ.GetRestSize();
 		if (UseSize == 0)
 		{
@@ -416,7 +456,7 @@ char CLanClient::SendPost()
 			m_IOCount = InterlockedDecrement(&m_IOCount);
 			if (m_IOCount == 0)
 			{
-				//ReleaseSession(pSession);
+				printf("A");
 				return POST_RETVAL_ERR_SESSION_DELETED;
 			}
 			InterlockedExchange(&SendIOData.IOMode, NONSENDING);
@@ -424,6 +464,9 @@ char CLanClient::SendPost()
 		}
 
 		WSABUF wsaSendBuf[ONE_SEND_WSABUF_MAX];
+		if (ONE_SEND_WSABUF_MAX < UseSize)
+			UseSize = ONE_SEND_WSABUF_MAX;
+
 		for (int i = 0; i < UseSize; ++i)
 		{
 			SendIOData.SendQ.Dequeue(&pSeirializeBufStore[i]);
@@ -443,14 +486,14 @@ char CLanClient::SendPost()
 				//	dump.Crash();
 				st_Error Error;
 				Error.GetLastErr = err;
-				Error.LanClientErr = LANCLIENT_ERR::WSASEND_ERR;
+				Error.ServerErr = SERVER_ERR::WSASEND_ERR;
 				OnError(&Error);
 
 				// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
 				m_IOCount = InterlockedDecrement(&m_IOCount);
 				if (m_IOCount == 0)
 				{
-					//ReleaseSession(pSession);
+					printf("A");
 					return POST_RETVAL_ERR_SESSION_DELETED;
 				}
 

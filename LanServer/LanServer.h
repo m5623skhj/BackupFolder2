@@ -1,9 +1,11 @@
 #pragma once
+#include <WinSock2.h>
 #include <unordered_map>
 #include "Ringbuffer.h"
 //#include "Stack.h"
 #include "LockFreeStack.h"
 #include "LockFreeQueue.h"
+#include "ServerCommon.h"
 
 // 해당 소켓이 송신중에 있는지 아닌지
 #define NONSENDING	0
@@ -19,53 +21,46 @@
 
 #define df_RELEASE_VALUE					0x100000000
 
+#define df_LANSERVER_HEADER_SIZE			2
+
 //////////////////////////////////////////////////////////////////////////////////////
 // LANSERVER_ERR
 // CLanServer 내에서 발생하는 에러 메시지들의 집합
 // 새로운 에러가 필요할 경우 추가할 것
 //////////////////////////////////////////////////////////////////////////////////////
-enum LANSERVER_ERR
-{
-	NO_ERR = 0,
-	WSASTARTUP_ERR,
-	LISTEN_SOCKET_ERR,
-	LISTEN_BIND_ERR,
-	LISTEN_LISTEN_ERR,
-	BEGINTHREAD_ERR,
-	SETSOCKOPT_ERR,
-	WORKERIOCP_NULL_ERR,
-	SESSION_NULL_ERR,
-	ACCEPT_ERR,
-	WSARECV_ERR,
-	WSASEND_ERR,
-	OVERLAPPED_NULL_ERR,
-	SERIALIZEBUF_NULL_ERR,
-	RINGBUFFER_MAX_SIZE_ERR,
-	RINGBUFFER_MIN_SIZE_ERR,
-	INCORRECT_SESSION,
-	HEADER_CODE_ERR,
-	PAYLOAD_SIZE_OVER_ERR,
-	PARSING_ERR,
-	END_OF_ERR
-};
+//enum LANSERVER_ERR
+//{
+//	NO_ERR = 0,
+//	WSASTARTUP_ERR,
+//	LISTEN_SOCKET_ERR,
+//	LISTEN_BIND_ERR,
+//	LISTEN_LISTEN_ERR,
+//	BEGINTHREAD_ERR,
+//	SETSOCKOPT_ERR,
+//	WORKERIOCP_NULL_ERR,
+//	SESSION_NULL_ERR,
+//	ACCEPT_ERR,
+//	WSARECV_ERR,
+//	WSASEND_ERR,
+//	OVERLAPPED_NULL_ERR,
+//	SERIALIZEBUF_NULL_ERR,
+//	RINGBUFFER_MAX_SIZE_ERR,
+//	RINGBUFFER_MIN_SIZE_ERR,
+//	INCORRECT_SESSION,
+//	END_OF_ERR
+//};
 
-//////////////////////////////////////////////////////////////////////////////////////
-// st_Error
-// Error 관리 구조체
-// GetLanServerError() 를 호출할 경우 
-// LanServer 클래스가 지니고 해당 형식의 에러 구조체를 넘겨줌
-//////////////////////////////////////////////////////////////////////////////////////
-struct st_Error
-{
-	int GetLastErr;
-	int LanServerErr;
-};
+struct st_Error;
 
 class CSerializationBuf;
+
 class CLanServer
 {
 private:
 	BYTE		m_byNumOfWorkerThread;
+	BYTE		m_byNumOfUsingWorkerThread;
+	BOOL		m_bIsNagleOn;
+	WORD		m_wPort;
 	SOCKET		m_ListenSock;
 	UINT		m_uiNumOfUser;
 	UINT		m_uiMaxClient;
@@ -103,13 +98,7 @@ private:
 		OVERLAPPED_SEND_IO_DATA		SendIOData;
 
 		CSerializationBuf*			pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
-
-		///////////////////////////////////////////
-		//LONG				New;
-		//LONG				Del;
-		///////////////////////////////////////////
 	};
-
 
 	Session					*m_pSessionArray;
 	CLockFreeStack<WORD>	*m_pSessionIndexStack;
@@ -129,13 +118,14 @@ public:
 	CLanServer();
 	virtual ~CLanServer();
 
-	bool Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient);
+	bool Start(const WCHAR *szOptionFileName);
 	void Stop();
+
+	bool LanServerOptionParsing(const WCHAR *szOptionFileName);
 
 	bool DisConnect(UINT64 SessionID);
 	bool SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf);
 
-	bool LanServerOptionParsing();
 	// Accept 후 접속처리 완료 후 호출
 	virtual void OnClientJoin(UINT64 OutClientID/* Client 정보 / ClientID / 기타등등 */) = 0;
 	// Disconnect 후 호출
@@ -146,7 +136,7 @@ public:
 	// 패킷 수신 완료 후
 	virtual void OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *OutReadBuf) = 0;
 	// 패킷 송신 완료 후
-	virtual void OnSend() = 0;
+	virtual void OnSend(UINT64 ClientID, int sendsize) = 0;
 
 	// 워커스레드 GQCS 바로 하단에서 호출
 	virtual void OnWorkerThreadBegin() = 0;

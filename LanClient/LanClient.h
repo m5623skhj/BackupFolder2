@@ -4,6 +4,7 @@
 //#include "Stack.h"
 #include "LockFreeStack.h"
 #include "LockFreeQueue.h"
+#include "ServerCommon.h"
 
 // 해당 소켓이 송신중에 있는지 아닌지
 #define NONSENDING	0
@@ -15,59 +16,22 @@
 
 #define ONE_SEND_WSABUF_MAX					200
 
+#define dfRECONNECT_MAX						10
+
 #define df_RELEASE_VALUE					0x100000000
 
-#define dfSERVER_IP							L"127.0.0.1"//L"10.0.0.1"
-#define dfSERVER_PORT						6000
-
-//////////////////////////////////////////////////////////////////////////////////////
-// LANSERVER_ERR
-// CLanServer 내에서 발생하는 에러 메시지들의 집합
-// 새로운 에러가 필요할 경우 추가할 것
-//////////////////////////////////////////////////////////////////////////////////////
-enum LANCLIENT_ERR
-{
-	NO_ERR = 0,
-	WSASTARTUP_ERR,
-	LISTEN_SOCKET_ERR,
-	LISTEN_BIND_ERR,
-	LISTEN_LISTEN_ERR,
-	BEGINTHREAD_ERR,
-	SETSOCKOPT_ERR,
-	WORKERIOCP_NULL_ERR,
-	PARSING_ERR,
-	SESSION_NULL_ERR,
-	ACCEPT_ERR,
-	WSARECV_ERR,
-	WSASEND_ERR,
-	OVERLAPPED_NULL_ERR,
-	SERIALIZEBUF_NULL_ERR,
-	RINGBUFFER_MAX_SIZE_ERR,
-	RINGBUFFER_MIN_SIZE_ERR,
-	INCORRECT_SESSION_ERR,
-	HEADER_CODE_ERR,
-	CHECKSUM_ERR,
-	END_OF_ERR
-};
-
-//////////////////////////////////////////////////////////////////////////////////////
-// st_Error
-// Error 관리 구조체
-// GetLanServerError() 를 호출할 경우 
-// LanServer 클래스가 지니고 해당 형식의 에러 구조체를 넘겨줌
-//////////////////////////////////////////////////////////////////////////////////////
-struct st_Error
-{
-	int GetLastErr = 0;
-	int LanClientErr = 0;
-	int Line = 0;
-};
+struct st_Error;
 
 class CSerializationBuf;
+
 class CLanClient
 {
 private:
 	BYTE		m_byNumOfWorkerThread;
+	BYTE		m_byNumOfUsingWorkerThread;
+	BOOL		m_bIsNagleOn;
+	WORD		m_wNumOfReconnect;
+	WORD		m_wPort;
 	SOCKET		m_sock;
 
 	WCHAR		m_IP[16];
@@ -87,7 +51,7 @@ private:
 		LONG										lBufferCount;
 		UINT										IOMode;
 		OVERLAPPED									Overlapped;
-		CLockFreeQueue<CSerializationBuf*>	SendQ;
+		CLockFreeQueue<CSerializationBuf*>			SendQ;
 	};
 
 	UINT						m_IOCount;
@@ -103,18 +67,19 @@ private:
 	UINT Worker();
 	static UINT __stdcall WorkerThread(LPVOID pLanClient);
 
-	bool LanClientOptionParsing();
+	bool LanClientOptionParsing(const WCHAR *szOptionFileName);
+
+	bool ReleaseSession();
 
 public:
 	CLanClient();
 	virtual ~CLanClient();
 
-	bool Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle);
+	bool Start(const WCHAR *szOptionFileName);
 	void Stop();
 
 	bool SendPacket(CSerializationBuf *pSerializeBuf);
-
-	// Accept 직후 IP 차단등을 위한 용도
+	// 서버에 Connect 가 완료 된 후
 	virtual void OnConnectionComplete() = 0;
 
 	// 패킷 수신 완료 후
