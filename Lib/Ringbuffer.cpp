@@ -53,10 +53,14 @@ int CRingbuffer::GetFreeSize()
 	int f = m_iFront;
 	int r = m_iRear;
 
-	if (r == 0)
-		return m_iSize - f - 1;
+	if (f < r)
+		return r - f - 1;
 	else
-		return m_iSize - f;
+		return r - 1 + m_iSize - f;
+	//if (r == 0)
+	//	return m_iSize - f - 1;
+	//else
+	//	return m_iSize - f;
 }
 
 int CRingbuffer::GetNotBrokenGetSize()
