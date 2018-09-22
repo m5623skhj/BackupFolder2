@@ -3,8 +3,11 @@
 
 #define dfSESSIONKEY_SIZE			64
 
+//#define dfACQUIRE_RESPONSE_SHIFT	60
 #define dfACQUIRE_RESPONSE_SHIFT	60
-#define dfAND_PARAMETER_PART		0x0fffffffffffffff
+#define dfIDENTIFIER_ERR_SHIFT		56
+//#define dfAND_PARAMETER_PART		0x0fffffffffffffff
+#define dfAND_PARAMETER_PART		0x00ffffffffffffff
 
 #define dfNUM_OF_SERVER				1
 
@@ -22,6 +25,9 @@ public:
 	void SendLoginPacketToLanClientAll(INT64 AccountNo, char *SessionKey);
 
 	bool ChattingServerJoined() { return m_bChattingServerClientJoined; }
+
+	int GetUsingSessionNodeCount() { return m_pSessionInfoTLS->GetUseNodeCount(); }
+	int GetUsingLanSerializeBufCount();
 
 	int NumOfSendLanClient;
 	int NumOfRecvLanClient;

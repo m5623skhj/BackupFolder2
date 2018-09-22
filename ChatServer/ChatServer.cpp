@@ -8,9 +8,8 @@
 
 CChatServer::CChatServer() : 
 	m_uiAccountNo(0), m_uiUpdateTPS(0), m_iNumOfRecvJoinPacket(0), m_iNumOfSessionKeyMiss(0), 
-	m_iNumOfSessionKeyNotFound(0), m_uiHeartBeatTime(dfHEARTBEAT_TIMEOVER + 1)
+	m_iNumOfSessionKeyNotFound(0)
 {
-
 }
 
 CChatServer::~CChatServer()
@@ -23,7 +22,7 @@ bool CChatServer::ChattingServerStart(const WCHAR *szChatServerOptionFileName, c
 	_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR", L"Start\n");
 	m_pSessionKeyMemoryPool = new CTLSMemoryPool<st_SessionKey>(5, false);
 	m_pUserMemoryPool = new CTLSMemoryPool<st_USER>(20, false);
-	m_pMessageMemoryPool = new CTLSMemoryPool<st_MESSAGE>(50, false);
+	m_pMessageMemoryPool = new CTLSMemoryPool<st_MESSAGE>(30, false);
 	m_pMessageQueue = new C_LFQueue<st_MESSAGE*>;
 	m_pChattingLanClient = new CChattingLanClient();
 
@@ -33,9 +32,12 @@ bool CChatServer::ChattingServerStart(const WCHAR *szChatServerOptionFileName, c
 	m_hExitEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
 	if (!Start(szChatServerOptionFileName))
 		return false;
-	if (!m_pChattingLanClient->ChattingLanClientStart(this, szChatServerLanClientFileName, m_pSessionKeyMemoryPool))
+	if (!m_pChattingLanClient->ChattingLanClientStart(this, szChatServerLanClientFileName, m_pSessionKeyMemoryPool, (UINT64)&m_UserSessionKeyMap))
 		return false;
 	m_hUpdateThreadHandle = (HANDLE)_beginthreadex(NULL, 0, UpdateThread, this, 0, NULL);
+	m_hSessionKeyHeartBeatThreadHandle = (HANDLE)_beginthreadex(NULL, 0, SessionKeyHeartbeatCheckThread, this, 0, NULL);
+
+	m_pSessionKeyMapCS = m_pChattingLanClient->GetSessionKeyMapCS();
 
 	return true;
 }
@@ -167,7 +169,7 @@ void CChatServer::OnError(st_Error *OutError)
 {
 	if (OutError->GetLastErr != 10054)
 	{
-		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
+		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
 		printf_s("==============================================================\n");
 	}
 }
@@ -182,8 +184,16 @@ UINT __stdcall CChatServer::HeartbeatCheckThread(LPVOID pChatServer)
 	return ((CChatServer*)pChatServer)->HeartbeatChecker();
 }
 
+UINT __stdcall CChatServer::SessionKeyHeartbeatCheckThread(LPVOID pChatServer)
+{
+	return ((CChatServer*)pChatServer)->SessionKeyHeartbeatChecker();
+}
+
 bool CChatServer::LoginPacketRecvedFromLoginServer(UINT64 AccountNo, st_SessionKey *SessionKey)
 {
+	//if (m_UserSessionKeyMap.find(AccountNo) != m_UserSessionKeyMap.end())
+	//	return false;
+
 	CNetServerSerializationBuf *RecvLoginServerPacket = CNetServerSerializationBuf::Alloc();
 	st_MESSAGE *pMessage = m_pMessageMemoryPool->Alloc();
 
@@ -195,6 +205,24 @@ bool CChatServer::LoginPacketRecvedFromLoginServer(UINT64 AccountNo, st_SessionK
 	SetEvent(m_hUpdateEvent);
 
 	return true;
+}
+
+void CChatServer::OverWriteSessionKey(UINT64 AccountNo, st_SessionKey *pSessionKey)
+{
+	// 세션키를 지우기 위하여 이전 세션키를 받음
+	st_SessionKey *NowSessionKey = m_UserSessionKeyMap.find(AccountNo)->second;
+	// 이전 세션키를 지움
+	m_pSessionKeyMemoryPool->Free(NowSessionKey);
+	// 현재 받아온 세션키를 이전 정보에 덮어 씀
+	NowSessionKey = pSessionKey;
+
+	//st_USER &OverWirteUser = *m_UserSessionMap.find(AccountNo)->second;
+	//
+	//// 차후 Leave 에서 현재 정보를 삭제하지 못하도록 플래그를 올림
+	//++OverWirteUser.byNumOfOverWriteSessionKey;
+	//// 이전에 섹터 맵에 자신이 존재할 경우 자신을 지움
+	//if (OverWirteUser.SectorX < dfMAX_SECTOR_X && OverWirteUser.SectorY < dfMAX_SECTOR_Y)
+	//	m_UserSectorMap[OverWirteUser.SectorY][OverWirteUser.SectorX].erase(AccountNo);
 }
 
 UINT CChatServer::Updater()
@@ -235,6 +263,8 @@ UINT CChatServer::Updater()
 					CNetServerSerializationBuf::Free(pSendPacket);
 					break;
 				case en_PACKET_CS_CHAT_REQ_HEARTBEAT:
+					PacketProc_SessionKeyHeartBeat(pPacket);
+					break;
 					//PacketProc_HeartBeat(pPacket, pSendPacket);
 					break;
 				case en_PACKET_CS_CHAT_REQ_LOGIN:
@@ -252,7 +282,7 @@ UINT CChatServer::Updater()
 					m_pMessageMemoryPool->Free(pRecvMessage);
 					continue;
 				case dfPACKET_TYPE_RECV_FROM_LOGIN_SERVER:
-					PacketProc_PlayerLoginFromLoginServer(pPacket);
+					//PacketProc_PlayerLoginFromLoginServer(pPacket);
 					break;
 				default:
 					// 에러 및 해당 세션 끊기
@@ -283,24 +313,53 @@ UINT CChatServer::Updater()
 
 UINT CChatServer::HeartbeatChecker()
 {
+	//HANDLE ExitHandle = m_hExitEvent;
+	//while (1)
+	//{
+	//	if (WaitForSingleObject(ExitHandle, 1000) == WAIT_TIMEOUT)
+	//	{
+	//		++m_uiHeartBeatTime;
+	//		UINT64 NowTime = m_uiHeartBeatTime - dfHEARTBEAT_TIMEOVER;
+
+	//		std::unordered_map<UINT64, st_USER*>::iterator TravelIter = m_UserSessionMap.begin();
+	//		std::unordered_map<UINT64, st_USER*>::iterator Enditer = m_UserSessionMap.end();
+
+	//		for (; TravelIter != Enditer; ++TravelIter)
+	//		{
+	//			if (TravelIter->second->uiBeforeRecvTime < NowTime)
+	//			{
+	//				CNetServerSerializationBuf *RecvLoginServerPacket = CNetServerSerializationBuf::Alloc();
+	//				st_MESSAGE *pMessage = m_pMessageMemoryPool->Alloc();
+
+	//				pMessage->Packet = RecvLoginServerPacket;
+	//				pMessage->wType = en_PACKET_CS_CHAT_REQ_HEARTBEAT;
+
+	//				m_pMessageQueue->M_Enqueue(pMessage);
+	//				SetEvent(m_hUpdateEvent);
+	//			}
+	//		}
+	//	}
+	//	else
+	//		break;
+	//}
+
+	return 0;
+}
+
+UINT CChatServer::SessionKeyHeartbeatChecker()
+{
 	HANDLE ExitHandle = m_hExitEvent;
 	while (1)
 	{
-		if (WaitForSingleObject(ExitHandle, 1000) == WAIT_TIMEOUT)
+		if (WaitForSingleObject(ExitHandle, 5000) == WAIT_TIMEOUT)
 		{
-			++m_uiHeartBeatTime;
-			UINT64 NowTime = m_uiHeartBeatTime - dfHEARTBEAT_TIMEOVER;
+			CNetServerSerializationBuf *SendBuf = CNetServerSerializationBuf::Alloc();
+			st_MESSAGE *pMessage = m_pMessageMemoryPool->Alloc();
+			pMessage->Packet = SendBuf;
+			pMessage->wType = en_PACKET_CS_CHAT_REQ_HEARTBEAT;
 
-			std::unordered_map<UINT64, st_USER*>::iterator TravelIter = m_UserSessionMap.begin();
-			std::unordered_map<UINT64, st_USER*>::iterator Enditer = m_UserSessionMap.end();
-
-			for (; TravelIter != Enditer; ++TravelIter)
-			{
-				if (TravelIter->second->uiBeforeRecvTime < NowTime)
-				{
-					DisConnect(TravelIter->second->uiSessionID);
-				}
-			}
+			m_pMessageQueue->M_Enqueue(pMessage);
+			SetEvent(m_hUpdateEvent);
 		}
 		else
 			break;
@@ -326,6 +385,7 @@ void CChatServer::BroadcastSectorAroundAll(WORD CharacterSectorX, WORD Character
 			auto iterEnd = m_UserSectorMap[SecotrY][SecotrX].end();
 			for (auto iter = m_UserSectorMap[SecotrY][SecotrX].begin(); iter != iterEnd; ++iter)
 			{
+				CNetServerSerializationBuf::AddRefCount(SendBuf);
 				SendPacket(iter->second->uiSessionID, SendBuf);
 			}
 		}
@@ -388,4 +448,24 @@ int CChatServer::GetNumOfSessionKeyMiss()
 int CChatServer::GetNumOfSessionKeyNotFound()
 {
 	return m_iNumOfSessionKeyNotFound;
+}
+
+int CChatServer::GetUsingNetServerBufCount()
+{
+	return CNetServerSerializationBuf::GetUsingSerializeBufNodeCount();
+}
+
+int CChatServer::GetUsingLanServerBufCount()
+{
+	return m_pChattingLanClient->GetUsingLanServerBufCount();
+}
+
+int CChatServer::GetUsingSessionKeyChunkCount()
+{
+	return m_pSessionKeyMemoryPool->GetUseChunkCount();
+}
+
+int CChatServer::GetUsingSessionKeyNodeCount()
+{
+	return m_pSessionKeyMemoryPool->GetUseNodeCount();
 }

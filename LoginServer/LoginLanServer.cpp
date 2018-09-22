@@ -59,6 +59,37 @@ void CLoginLanServer::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *OutRea
 	*OutReadBuf >> Type;
 	switch (Type)
 	{
+	case en_PACKET_SS_RES_NEW_CLIENT_LOGIN:
+	{
+		INT64 ClientAccountNo, SessionKeyID;
+		*OutReadBuf >> ClientAccountNo >> SessionKeyID;
+		
+		// AccountMap 임계영역 시작
+		EnterCriticalSection(&m_AccountMapCriticalSection);
+
+		st_SessionInfo &SessionInfo = *m_AccountMap.find(ClientAccountNo)->second;
+		UINT64 &MapSessionIdentifier = SessionInfo.SessionKeyIdentifier;
+		MapSessionIdentifier += ((UINT64)1 << dfACQUIRE_RESPONSE_SHIFT);
+		
+		if ((MapSessionIdentifier & dfAND_PARAMETER_PART) != SessionKeyID)
+			MapSessionIdentifier += ((UINT64)1 << dfIDENTIFIER_ERR_SHIFT);
+
+		if (MapSessionIdentifier >> dfACQUIRE_RESPONSE_SHIFT == dfNUM_OF_SERVER)
+		{
+			m_AccountMap.erase(ClientAccountNo);
+			if (MapSessionIdentifier >> dfIDENTIFIER_ERR_SHIFT == dfNUM_OF_SERVER << 4)
+				m_pLoginServer->LoginComplete(ClientAccountNo, dfGAME_LOGIN_OK);
+			else
+				m_pLoginServer->LoginComplete(ClientAccountNo, dfGAME_LOGIN_FAIL);
+
+			m_pSessionInfoTLS->Free(&SessionInfo);
+			InterlockedIncrement((UINT*)&NumOfRecvLanClient);
+		}
+
+		// AccountMap 임계영역 끝
+		LeaveCriticalSection(&m_AccountMapCriticalSection);
+	}
+	break;
 	case en_PACKET_SS_LOGINSERVER_LOGIN:
 	{
 		BYTE ServerType;
@@ -73,37 +104,7 @@ void CLoginLanServer::OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *OutRea
 		// else if
 		// ...
 	}
-		break;
-	case en_PACKET_SS_RES_NEW_CLIENT_LOGIN:
-	{
-		INT64 ClientAccountNo, SessionKeyID;
-		*OutReadBuf >> ClientAccountNo >> SessionKeyID;
-		
-		// AccountMap 임계영역 시작
-		EnterCriticalSection(&m_AccountMapCriticalSection);
-
-		UINT64 &MapSessionIdentifier = m_AccountMap.find(ClientAccountNo)->second->SessionKeyIdentifier;
-		if ((MapSessionIdentifier & dfAND_PARAMETER_PART) == SessionKeyID)
-		{
-			MapSessionIdentifier += ((UINT64)1 << dfACQUIRE_RESPONSE_SHIFT);
-			if (MapSessionIdentifier >> dfACQUIRE_RESPONSE_SHIFT == dfNUM_OF_SERVER)
-			{
-				m_AccountMap.erase(ClientAccountNo);
-				m_pLoginServer->LoginComplete(ClientAccountNo, dfGAME_LOGIN_OK);
-
-				InterlockedIncrement((UINT*)&NumOfRecvLanClient);
-			}
-		}
-		else
-		{
-			m_AccountMap.erase(ClientAccountNo);
-			m_pLoginServer->LoginComplete(ClientAccountNo, dfGAME_LOGIN_FAIL);
-		}
-
-		// AccountMap 임계영역 끝
-		LeaveCriticalSection(&m_AccountMapCriticalSection);
-	}
-		break;
+	break;
 	default:
 		g_Dump.Crash();
 		break;
@@ -167,4 +168,9 @@ void CLoginLanServer::OnError(st_Error *OutError)
 		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
 		printf_s("==============================================================\n");
 	}
+}
+
+int CLoginLanServer::GetUsingLanSerializeBufCount()
+{
+	return CSerializationBuf::GetUsingSerializeBufNodeCount(); 
 }

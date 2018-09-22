@@ -1,10 +1,13 @@
 #pragma once
-#include <WinSock2.h>
 #include <unordered_map>
 #include "Ringbuffer.h"
 //#include "Stack.h"
 #include "LockFreeStack.h"
-#include "LockFreeQueue.h"
+#include "CommonSource/LockFreeQueueA.h"
+#include "ServerCommon.h"
+
+using namespace Olbbemi;
+#include <map>
 
 // 해당 소켓이 송신중에 있는지 아닌지
 #define NONSENDING	0
@@ -20,56 +23,23 @@
 
 #define df_RELEASE_VALUE					0x100000000
 
-//////////////////////////////////////////////////////////////////////////////////////
-// LANSERVER_ERR
-// CLanServer 내에서 발생하는 에러 메시지들의 집합
-// 새로운 에러가 필요할 경우 추가할 것
-//////////////////////////////////////////////////////////////////////////////////////
-enum LANSERVER_ERR
-{
-	NO_ERR = 0,
-	WSASTARTUP_ERR,
-	LISTEN_SOCKET_ERR,
-	LISTEN_BIND_ERR,
-	LISTEN_LISTEN_ERR,
-	BEGINTHREAD_ERR,
-	SETSOCKOPT_ERR,
-	WORKERIOCP_NULL_ERR,
-	SESSION_NULL_ERR,
-	ACCEPT_ERR,
-	WSARECV_ERR,
-	WSASEND_ERR,
-	OVERLAPPED_NULL_ERR,
-	SERIALIZEBUF_NULL_ERR,
-	RINGBUFFER_MAX_SIZE_ERR,
-	RINGBUFFER_MIN_SIZE_ERR,
-	INCORRECT_SESSION_ERR,
-	HEADER_CODE_ERR,
-	CHECKSUM_ERR,
-	END_OF_ERR
-};
+struct st_Error;
 
-//////////////////////////////////////////////////////////////////////////////////////
-// st_Error
-// Error 관리 구조체
-// GetLanServerError() 를 호출할 경우 
-// LanServer 클래스가 지니고 해당 형식의 에러 구조체를 넘겨줌
-//////////////////////////////////////////////////////////////////////////////////////
-struct st_Error
-{
-	int GetLastErr;
-	int LanServerErr;
-};
+class CNetServerSerializationBuf;
 
-class CSerializationBuf;
 class CNetServer
 {
 private:
 	BYTE		m_byNumOfWorkerThread;
-	SOCKET		m_ListenSock;
+	BYTE		m_byNumOfUsingWorkerThread;
+	BOOL		m_bIsNagleOn;
+	WORD		m_wPort;
 	UINT		m_uiNumOfUser;
 	UINT		m_uiMaxClient;
+	UINT		m_uiAcceptTotal;
+	UINT		m_uiAcceptTPS;
 
+	SOCKET		m_ListenSock;
 	UINT64		m_iIDCount;
 	WCHAR		m_IP[16];
 
@@ -90,11 +60,32 @@ private:
 		LONG										lBufferCount;
 		UINT										IOMode;
 		OVERLAPPED									Overlapped;
-		CLockFreeQueue<CSerializationBuf*>			SendQ;
+		
+		C_LFQueue<CNetServerSerializationBuf*>		SendQ;
+	};
+
+	enum en_CALL_WHERER
+	{
+		Call_Accept = 1,
+		Call_Accept_Last,
+		Call_Transffered_Zero,
+		Call_Header_Error,
+		Call_Payload_Error,
+		Call_Checksum_Error,
+		Call_GQCS_END,
+		Call_RecvPost1,
+		Call_RecvPost2,
+		Call_RecvPost3,
+		Call_SendPost1,
+		Call_SendPost2,
+		Call_SendPost3,
+		Call_AcquireLock,
+		Call_AcquireUnLock,
 	};
 
 	struct Session
 	{
+		BOOL						bSendDisconnect;
 		UINT						IOCount;
 		UINT						IsUseSession;
 		SOCKET						sock;
@@ -102,7 +93,7 @@ private:
 		OVERLAPPEDIODATA			RecvIOData;
 		OVERLAPPED_SEND_IO_DATA		SendIOData;
 
-		CSerializationBuf*			pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
+		CNetServerSerializationBuf*	pSeirializeBufStore[ONE_SEND_WSABUF_MAX];
 
 		///////////////////////////////////////////
 		//LONG				New;
@@ -121,31 +112,37 @@ private:
 
 	UINT Accepter();
 	UINT Worker();
-	static UINT __stdcall AcceptThread(LPVOID pLanServer);
-	static UINT __stdcall WorkerThread(LPVOID pLanServer);
-protected:
+	static UINT __stdcall AcceptThread(LPVOID pNetServer);
+	static UINT __stdcall WorkerThread(LPVOID pNetServer);
+
+	bool NetServerOptionParsing(const WCHAR *szOptionFileName);
+
+	bool SessionAcquireLock(UINT64 SessionID);
+	void SessionAcquireUnLock(WORD SessionIndex);
+
+protected :
+	bool Start(const WCHAR *szOptionFileName);
+	void Stop();
 
 public:
 	CNetServer();
 	virtual ~CNetServer();
 
-	bool Start(const WCHAR *IP, UINT PORT, BYTE NumOfWorkerThread, bool IsNagle, UINT MaxClient);
-	void Stop();
-
 	bool DisConnect(UINT64 SessionID);
-	bool SendPacket(UINT64 SessionID, CSerializationBuf *pSerializeBuf);
+	bool SendPacket(UINT64 SessionID, CNetServerSerializationBuf *pSerializeBuf);
+	bool SendPacketAndDisConnect(UINT64 SessionID, CNetServerSerializationBuf *pSendBuf);
 
 	// Accept 후 접속처리 완료 후 호출
 	virtual void OnClientJoin(UINT64 OutClientID/* Client 정보 / ClientID / 기타등등 */) = 0;
 	// Disconnect 후 호출
 	virtual void OnClientLeave(UINT64 ClientID) = 0;
 	// Accept 직후 IP 차단등을 위한 용도
-	virtual bool OnConnectionRequest() = 0;
+	virtual bool OnConnectionRequest(const WCHAR *IP) = 0;
 
 	// 패킷 수신 완료 후
-	virtual void OnRecv(UINT64 ReceivedSessionID, CSerializationBuf *OutReadBuf) = 0;
+	virtual void OnRecv(UINT64 ReceivedSessionID, CNetServerSerializationBuf *OutReadBuf) = 0;
 	// 패킷 송신 완료 후
-	virtual void OnSend() = 0;
+	virtual void OnSend(UINT64 ClientID, int sendsize) = 0;
 
 	// 워커스레드 GQCS 바로 하단에서 호출
 	virtual void OnWorkerThreadBegin() = 0;
@@ -156,7 +153,10 @@ public:
 
 	UINT GetNumOfUser();
 	UINT GetStackRestSize();
+	UINT GetAcceptTotal();
+	UINT GetAcceptTPSAndReset();
 
-	//LONG g_ULLConuntOfNew = 0;
-	//LONG g_ULLConuntOfDel = 0;
+	int checksum = 0;
+	int payloadOver = 0;
+	int HeaderCode = 0;
 };

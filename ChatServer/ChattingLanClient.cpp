@@ -7,26 +7,28 @@
 
 CChattingLanClient::CChattingLanClient()
 {
-
 }
 
 CChattingLanClient::~CChattingLanClient()
 {
-
 }
 
-bool CChattingLanClient::ChattingLanClientStart(CChatServer* pChattingServer, const WCHAR *szOptionFileName, CTLSMemoryPool<st_SessionKey> *pSessionKeyMemoryPool)
+bool CChattingLanClient::ChattingLanClientStart(CChatServer* pChattingServer, const WCHAR *szOptionFileName, CTLSMemoryPool<st_SessionKey> *pSessionKeyMemoryPool, UINT64 SessionKeyMapAddr)
 {
 	m_pChattingServer = pChattingServer;
 	m_pSessionKeyMemoryPool = pSessionKeyMemoryPool;
 	if (!Start(szOptionFileName))
 		return false;
 
+	InitializeCriticalSection(&m_SessionKeyMapCS);
+	m_pSessionKeyMap = (std::unordered_map<UINT64, st_SessionKey*>*)SessionKeyMapAddr;
+
 	return true;
 }
 
 void CChattingLanClient::Stop()
 {
+	DeleteCriticalSection(&m_SessionKeyMapCS);
 
 }
 
@@ -58,12 +60,30 @@ void CChattingLanClient::OnRecv(CSerializationBuf *OutReadBuf)
 		// ...
 
 		INT64 AccountNo, SessionKeyID;
-		st_SessionKey *SessionKey = m_pSessionKeyMemoryPool->Alloc();
+		st_SessionKey *pSessionKey = m_pSessionKeyMemoryPool->Alloc();
 		*OutReadBuf >> AccountNo;
-		OutReadBuf->ReadBuffer((char*)SessionKey, dfSESSIONKEY_SIZE);
+		OutReadBuf->ReadBuffer((char*)pSessionKey, dfSESSIONKEY_SIZE);
 		*OutReadBuf >> SessionKeyID;
+		pSessionKey->SessionKeyLifeTime = dfHEARTBEAT_TIMEMAX;
 
-		m_pChattingServer->LoginPacketRecvedFromLoginServer(AccountNo, SessionKey);
+		//if(!)
+			//++SessionKeyID;
+		//m_pChattingServer->LoginPacketRecvedFromLoginServer(AccountNo, SessionKey);
+
+		EnterCriticalSection(&m_SessionKeyMapCS);
+
+		if (m_pSessionKeyMap->insert({ AccountNo, pSessionKey }).second == false)
+		{
+			st_SessionKey **pDuplicateAccountNoSessionKey = &m_pSessionKeyMap->find(AccountNo)->second;
+			m_pSessionKeyMemoryPool->Free(*pDuplicateAccountNoSessionKey);
+
+			//if (memcmp(*pDuplicateAccountNoSessionKey, pSessionKey, dfSESSIONKEY_SIZE) == 0)
+			//	m_pSessionKeyMemoryPool->Free(*pDuplicateAccountNoSessionKey);
+
+			*pDuplicateAccountNoSessionKey = pSessionKey;
+		}
+			
+		LeaveCriticalSection(&m_SessionKeyMapCS);
 
 		CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
 		Type = en_PACKET_SS_RES_NEW_CLIENT_LOGIN;
@@ -103,4 +123,9 @@ void CChattingLanClient::OnError(st_Error *OutError)
 		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
 		printf_s("==============================================================\n");
 	}
+}
+
+int CChattingLanClient::GetUsingLanServerBufCount()
+{
+	return CSerializationBuf::GetUsingSerializeBufNodeCount();
 }

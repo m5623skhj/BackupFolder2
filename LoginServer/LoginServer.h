@@ -30,6 +30,12 @@ public :
 	int GetLanServerRecv();
 	int GetNetServerAcceptTotal() { return GetAcceptTotal(); }
 
+	int GetUsingNetSerializeBufCount();
+	int GetUsingNetUserInfoNodeCount();
+
+	int GetUsingLanServerSessionNodeCount();
+	int GetUsingLanSerializeBufCount();
+
 private:
 	// Accept 후 접속처리 완료 후 호출
 	virtual void OnClientJoin(UINT64 OutClientID/* Client 정보 / ClientID / 기타등등 */);

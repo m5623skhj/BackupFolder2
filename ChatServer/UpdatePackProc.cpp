@@ -2,6 +2,8 @@
 #include "ChatServer.h"
 #include "NetServerSerializeBuffer.h"
 #include "CommonProtocol.h"
+#include "Log.h"
+#include "ChattingLanClient.h"
 
 
 /////////////////////////////////////////////////////////////////////
@@ -17,7 +19,7 @@ bool CChatServer::PacketProc_PlayerJoin(UINT64 SessionID)
 	NewClient.SectorY = dfINIT_SECTOR_VALUE;
 	NewClient.bIsLoginUser = FALSE;
 	NewClient.uiAccountNO = dfACCOUNT_INIT_VALUE;
-	NewClient.uiBeforeRecvTime = m_uiHeartBeatTime;
+	NewClient.uiBeforeRecvTime = dfHEARTBEAT_TIMEMAX;
 
 	m_UserSessionMap.insert({ SessionID, &NewClient });
 
@@ -25,17 +27,40 @@ bool CChatServer::PacketProc_PlayerJoin(UINT64 SessionID)
 }
 
 bool CChatServer::PacketProc_PlayerLeave(UINT64 SessionID)
-{   
+{
 	st_USER &LeaveClient = *m_UserSessionMap.find(SessionID)->second;
 	if (&LeaveClient == m_UserSessionMap.end()->second)
 		return false;
 
-	m_UserSessionKeyMap.erase(SessionID);
+	// 이전에 해당 유저의 정보를 덮어 썼는지 확인함
+	if (LeaveClient.byNumOfOverWriteSessionKey > 0)
+	{
+		// 이전 정보들은 이미 로그인 할 때 지웠으므로
+		// 플래그만 깎고 반환함
+		--LeaveClient.byNumOfOverWriteSessionKey;
+		return false;
+	}
+
+	//// SessionKeyMap 임계영역 시작
+	//EnterCriticalSection(&m_SessionKeyMapCS);
+	//st_SessionKey *pSessionKey = m_UserSessionKeyMap.find(LeaveClient.uiAccountNO)->second;
+	//if (pSessionKey != NULL)
+	//{
+	//	if (m_UserSessionKeyMap.erase(LeaveClient.uiAccountNO) != 0)
+	//		m_pSessionKeyMemoryPool->Free(pSessionKey);
+	//	else
+	//		g_Dump.Crash();
+	//}
+	//else
+	//	g_Dump.Crash();
+	//// SessionKeyMap 임계영역 끝
+	//LeaveCriticalSection(&m_SessionKeyMapCS);
+
 	m_UserSessionMap.erase(SessionID);
-	if (LeaveClient.SectorX >= dfMAX_SECTOR_X || LeaveClient.SectorY >= dfMAX_SECTOR_Y)
+	if (LeaveClient.SectorX > dfMAX_SECTOR_X || LeaveClient.SectorY > dfMAX_SECTOR_Y)
 	{
 		m_pUserMemoryPool->Free(&LeaveClient);
-		return false;
+		return true;
 	}
 
 	if (m_UserSectorMap[LeaveClient.SectorY][LeaveClient.SectorX].erase(SessionID) == 0)
@@ -60,11 +85,30 @@ bool CChatServer::PacketProc_PlayerLoginFromLoginServer(CNetServerSerializationB
 	*pRecvPacket >> AccountNo >> SessionKeyAddress;
 	pSessionKey = (st_SessionKey*)SessionKeyAddress;
 
+	// SessionKeyMap 임계영역 시작
+	EnterCriticalSection(m_pSessionKeyMapCS);
+	
+	// insert 하면서 AccountNo 가 세션 키 맵에 남아있다면 
+	// 이전 유저가 아직 나가지 않은 상황이라고 판단함
 	if ((m_UserSessionKeyMap.insert({ AccountNo, pSessionKey })).second == false)
 	{
-		m_pSessionKeyMemoryPool->Free(pSessionKey);
-		return false;
+		// 세션키를 지우기 위하여 이전 세션키를 받음
+		st_SessionKey *NowSessionKey = m_UserSessionKeyMap.find(AccountNo)->second;
+		// 이전 세션키를 지움
+		m_pSessionKeyMemoryPool->Free(NowSessionKey);
+		// 현재 받아온 세션키를 이전 정보에 덮어 씀
+		NowSessionKey = pSessionKey;
+		st_USER &OverWirteUser = *m_UserSessionMap.find(AccountNo)->second;
+
+		// 차후 Leave 에서 현재 정보를 삭제하지 못하도록 플래그를 올림
+		++OverWirteUser.byNumOfOverWriteSessionKey;
+		// 이전에 섹터 맵에 자신이 존재할 경우 자신을 지움
+		if(OverWirteUser.SectorX < dfMAX_SECTOR_X && OverWirteUser.SectorY < dfMAX_SECTOR_Y)
+			m_UserSectorMap[OverWirteUser.SectorY][OverWirteUser.SectorX].erase(AccountNo);
 	}
+
+	// SessionKeyMap 임계영역 끝
+	LeaveCriticalSection(m_pSessionKeyMapCS);
 
 	return true;
 }
@@ -141,7 +185,7 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 		return false;
 	}
 
-	User.uiBeforeRecvTime = m_uiHeartBeatTime;
+	User.uiBeforeRecvTime = dfHEARTBEAT_TIMEMAX;
 
 	User.SectorX = SectorX;
 	User.SectorY = SectorY;
@@ -150,7 +194,9 @@ bool CChatServer::PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket,
 	WORD Type = en_PACKET_CS_CHAT_RES_SECTOR_MOVE;
 	*pOutSendPacket << Type << AccountNo << SectorX << SectorY;
 
+	CNetServerSerializationBuf::AddRefCount(pOutSendPacket);
 	SendPacket(SessionID, pOutSendPacket);
+
 	return true;
 }
 
@@ -224,7 +270,7 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 		return false;
 	}
 
-	User.uiBeforeRecvTime = m_uiHeartBeatTime;
+	User.uiBeforeRecvTime = dfHEARTBEAT_TIMEMAX;
 
 	WORD Type = en_PACKET_CS_CHAT_RES_MESSAGE;
 
@@ -234,13 +280,37 @@ bool CChatServer::PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket
 	SendBuf << MessageLength;
 
 	SendBuf.WriteBuffer(pRecvPacket->GetReadBufferPtr(), MessageLength);
+	
 	BroadcastSectorAroundAll(User.SectorX, User.SectorY, &SendBuf);
+
 	return true;
 }
 
 void CChatServer::PacketProc_HeartBeat(CNetServerSerializationBuf *pRecvPacket, CNetServerSerializationBuf *pOutSendPacket)
 {
 
+}
+
+void CChatServer::PacketProc_SessionKeyHeartBeat(CNetServerSerializationBuf *pRecvPacket)
+{
+	EnterCriticalSection(m_pSessionKeyMapCS);
+
+	std::unordered_map<UINT64, st_SessionKey*>::iterator TravelIter = m_UserSessionKeyMap.begin();
+	std::unordered_map<UINT64, st_SessionKey*>::iterator Enditer = m_UserSessionKeyMap.end();
+
+	for (; TravelIter != Enditer; ++TravelIter)
+	{
+		UINT64 &SessionKeyLifeTime = TravelIter->second->SessionKeyLifeTime;
+		SessionKeyLifeTime--;
+
+		if (SessionKeyLifeTime <= 0)
+		{
+			m_pSessionKeyMemoryPool->Free(TravelIter->second);
+			m_UserSessionKeyMap.erase(TravelIter);
+		}
+	}
+
+	LeaveCriticalSection(m_pSessionKeyMapCS);
 }
 
 bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNetServerSerializationBuf *pOutSendPacket, UINT64 SessionID)
@@ -275,7 +345,9 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 		err.Line = __LINE__;
 		err.ServerErr = NOT_IN_USER_MAP_ERR;
 		OnError(&err);
+
 		SendPacket(SessionID, &SendBuf);
+
 		DisConnect(SessionID);
 		return false;
 	}
@@ -284,16 +356,19 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 	RecvPacket.ReadBuffer((char*)&User.szID, sizeof(WCHAR) * dfID_NICKNAME_LENGTH);
 	RecvPacket.ReadBuffer((char*)&User.SessionKey, sizeof(User.SessionKey));
 	
+	// SessionKeyMap 임계영역 시작
+	EnterCriticalSection(m_pSessionKeyMapCS);
+
 	st_SessionKey *pSessionKey = m_UserSessionKeyMap.find(AccountNo)->second;
-	if(memcmp(pSessionKey, m_UserSessionKeyMap.find(AccountNo)->second, dfSESSIONKEY_SIZE) != 0)
-	//if (pSessionKey == m_UserSessionKeyMap.end()->second)
+	if (memcmp(pSessionKey, User.SessionKey, dfSESSIONKEY_SIZE) != 0)
+		//if (pSessionKey == m_UserSessionKeyMap.end()->second)
 	{
 		m_iNumOfSessionKeyMiss++;
 		Status = FALSE;
 		SendBuf << Type << Status << AccountNo;
 		st_Error err;
 		err.Line = __LINE__;
-		err.ServerErr = NOT_IN_USER_ACCOUNTMAP_ERR;
+		err.ServerErr = INCORRECT_SESSION_KEY_ERR;
 		OnError(&err);
 		SendPacket(SessionID, &SendBuf);
 		DisConnect(SessionID);
@@ -301,12 +376,18 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 	}
 
 	m_pSessionKeyMemoryPool->Free(pSessionKey);
+	m_UserSessionKeyMap.erase(AccountNo);
+
+	// SessionKeyMap 임계영역 끝
+	LeaveCriticalSection(m_pSessionKeyMapCS);
 
 	SendBuf << Type  << Status << AccountNo;
 	
 	User.bIsLoginUser = TRUE;
-	User.uiBeforeRecvTime = m_uiHeartBeatTime;
+	User.uiBeforeRecvTime = dfHEARTBEAT_TIMEMAX;
 
+	CNetServerSerializationBuf::AddRefCount(&SendBuf);
 	SendPacket(SessionID, &SendBuf);
+
 	return true;
 }

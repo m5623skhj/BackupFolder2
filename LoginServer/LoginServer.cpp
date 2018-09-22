@@ -21,7 +21,7 @@ bool CLoginServer::LoginServerStart(const WCHAR *szLoginServerFileName, const WC
 	NumOfLoginCompleteUser = 0;
 
 	m_pLoginLanServer = new CLoginLanServer();
-	m_pUserInfoMemeoryPool = new CTLSMemoryPool<st_LoginUserInfo>(2, false);
+	m_pUserInfoMemeoryPool = new CTLSMemoryPool<st_LoginUserInfo>(3, false);
 
 	_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR", L"Start\n");
 
@@ -55,6 +55,20 @@ void CLoginServer::OnClientJoin(UINT64 OutClientID)
 
 void CLoginServer::OnClientLeave(UINT64 ClientID)
 {
+	// UserSessionMap 임계영역 시작
+	EnterCriticalSection(&m_UserSessionIDMapCriticalSection); 
+	
+	st_LoginUserInfo *pLeaveUser = m_LoginUserInfoMap.find(ClientID)->second;
+	if (pLeaveUser != m_LoginUserInfoMap.end()->second)
+	{
+		m_LoginUserInfoMap.erase(ClientID);
+		m_pUserInfoMemeoryPool->Free(pLeaveUser);
+	}
+
+	// UserSessionMap 임계영역 끝
+	LeaveCriticalSection(&m_UserSessionIDMapCriticalSection);
+	
+
 	InterlockedDecrement((UINT*)&NumOfLoginWaitingUser);
 }
 
@@ -166,6 +180,7 @@ void CLoginServer::LoginComplete(UINT64 AccountNo, BYTE Status)
 		return;
 	}
 	m_LoginUserInfoMap.erase(AccountNo);
+	m_pUserInfoMemeoryPool->Free(&LoginCompleteUser);
 
 	// UserSessionMap 임계영역 끝
 	LeaveCriticalSection(&m_UserSessionIDMapCriticalSection);
@@ -181,10 +196,7 @@ void CLoginServer::LoginComplete(UINT64 AccountNo, BYTE Status)
 	SendBuf << m_usChatServerPort;
 
 	CNetServerSerializationBuf::AddRefCount(&SendBuf);
-	SendPacket(LoginCompleteUser.uiSessionID, &SendBuf);
-
-	//if (InterlockedIncrement((UINT*)&NumOfLoginCompleteUser) > 500)
-	//	printf("A");
+	SendPacketAndDisConnect(LoginCompleteUser.uiSessionID, &SendBuf);
 
 	CNetServerSerializationBuf::Free(&SendBuf);
 }
@@ -196,7 +208,7 @@ bool CLoginServer::ChattingServerJoined()
 
 void CLoginServer::OnSend(UINT64 ClientID, int sendsize)
 {
-	DisConnect(ClientID);
+	
 }
 
 void CLoginServer::OnWorkerThreadBegin()
@@ -255,4 +267,24 @@ int CLoginServer::GetLanServerSend()
 int CLoginServer::GetLanServerRecv()
 {
 	return m_pLoginLanServer->NumOfRecvLanClient; 
+}
+
+int CLoginServer::GetUsingNetSerializeBufCount() 
+{
+	return CNetServerSerializationBuf::GetUsingSerializeBufNodeCount(); 
+}
+
+int CLoginServer::GetUsingNetUserInfoNodeCount()
+{
+	return m_pUserInfoMemeoryPool->GetUseNodeCount(); 
+}
+
+int CLoginServer::GetUsingLanServerSessionNodeCount()
+{
+	return m_pLoginLanServer->GetUsingSessionNodeCount(); 
+}
+
+int CLoginServer::GetUsingLanSerializeBufCount() 
+{
+	return m_pLoginLanServer->GetUsingLanSerializeBufCount(); 
 }
