@@ -1,9 +1,8 @@
 #pragma once
 #include "LanClient.h"
+#include "ChatServer.h"
 
 #define dfSESSIONKEY_SIZE			64
-
-class CChatServer;
 
 struct st_SessionKey;
 
@@ -13,8 +12,12 @@ public:
 	CChattingLanClient();
 	virtual ~CChattingLanClient();
 
-	bool ChattingLanClientStart(CChatServer* pChattingServer, const WCHAR *szOptionFileName, CTLSMemoryPool<st_SessionKey> *pSessionKeyMemoryPool);
+	bool ChattingLanClientStart(CChatServer* pChattingServer, const WCHAR *szOptionFileName, CTLSMemoryPool<st_SessionKey> *pSessionKeyMemoryPool, UINT64 SessionKeyMapAddr);
 	void Stop();
+
+	CRITICAL_SECTION* GetSessionKeyMapCS() { return &m_SessionKeyMapCS; }
+
+	int GetUsingLanServerBufCount();
 
 	int NumOfRecvPacket = 0;
 
@@ -46,8 +49,9 @@ private:
 	BYTE										m_byServerIndex;
 
 	UINT64										m_iIdentificationNumber;
-	LPCRITICAL_SECTION							m_pAccountMapCriticalSection;
+	CRITICAL_SECTION							m_SessionKeyMapCS;
 	CTLSMemoryPool<st_SessionKey>				*m_pSessionKeyMemoryPool;
+	std::unordered_map<UINT64, st_SessionKey*>	*m_pSessionKeyMap;
 
 	CChatServer									*m_pChattingServer;
 };

@@ -23,7 +23,7 @@ bool CChatServer::ChattingServerStart(const WCHAR *szChatServerOptionFileName, c
 	m_pSessionKeyMemoryPool = new CTLSMemoryPool<st_SessionKey>(5, false);
 	m_pUserMemoryPool = new CTLSMemoryPool<st_USER>(20, false);
 	m_pMessageMemoryPool = new CTLSMemoryPool<st_MESSAGE>(30, false);
-	m_pMessageQueue = new C_LFQueue<st_MESSAGE*>;
+	m_pMessageQueue = new CLockFreeQueue<st_MESSAGE*>;
 	m_pChattingLanClient = new CChattingLanClient();
 
 	SetLogLevel(LOG_LEVEL::LOG_DEBUG);
@@ -86,7 +86,7 @@ void CChatServer::OnClientJoin(UINT64 JoinClientID)
 	//*PlayerJoinPacket << Type;
 	pMessage->wType = dfPACKET_TYPE_JOIN;
 	pMessage->uiSessionID = JoinClientID;
-	m_pMessageQueue->M_Enqueue(pMessage);
+	m_pMessageQueue->Enqueue(pMessage);
 	SetEvent(m_hUpdateEvent);
 
 	//EnterCriticalSection(&m_UserSessionLock);
@@ -102,7 +102,7 @@ void CChatServer::OnClientLeave(UINT64 LeaveClientID)
 	//*PlayerLeavePacket << Type;
 	pMessage->wType = dfPACKET_TYPE_LEAVE;
 	pMessage->uiSessionID = LeaveClientID;
-	m_pMessageQueue->M_Enqueue(pMessage);
+	m_pMessageQueue->Enqueue(pMessage);
 	SetEvent(m_hUpdateEvent);
 
 	//st_USER &LeaveClient = *m_UserSessionMap.find(LeaveClientID)->second;
@@ -146,7 +146,7 @@ void CChatServer::OnRecv(UINT64 ReceivedSessionID, CNetServerSerializationBuf *S
 	pMessage->Packet = ServerReceivedBuffer;
 	*ServerReceivedBuffer >> pMessage->wType;
 
-	m_pMessageQueue->M_Enqueue(pMessage);
+	m_pMessageQueue->Enqueue(pMessage);
 	SetEvent(m_hUpdateEvent);
 }
 
@@ -201,7 +201,7 @@ bool CChatServer::LoginPacketRecvedFromLoginServer(UINT64 AccountNo, st_SessionK
 	pMessage->Packet = RecvLoginServerPacket;
 	pMessage->wType = dfPACKET_TYPE_RECV_FROM_LOGIN_SERVER;
 
-	m_pMessageQueue->M_Enqueue(pMessage);
+	m_pMessageQueue->Enqueue(pMessage);
 	SetEvent(m_hUpdateEvent);
 
 	return true;
@@ -232,19 +232,19 @@ UINT CChatServer::Updater()
 	UpdateHandle[1] = m_hExitEvent;
 
 	st_MESSAGE *pRecvMessage = nullptr;
-	C_LFQueue<st_MESSAGE*> &MessageQ = *m_pMessageQueue;
+	CLockFreeQueue<st_MESSAGE*> &MessageQ = *m_pMessageQueue;
 
 	while (1)
 	{
 		if (WaitForMultipleObjects(2, UpdateHandle, FALSE, INFINITE) == WAIT_OBJECT_0)
 		{
 			// 메시지 큐가 빌 때 까지
-			while (MessageQ.M_GetUseCount() != 0)
+			while (MessageQ.GetRestSize() != 0)
 			{
 				// 업데이트 큐에서 뽑아오기
 				// 해당 업데이트 큐에 뽑아오는 구조체에 세션 ID 가 들어있으므로
 				// 그 구조체의 세션 ID 를 기준으로 맵에서 찾아내어 유저를 찾아옴
-				MessageQ.M_Dequeue(pRecvMessage);
+				MessageQ.Dequeue(&pRecvMessage);
 
 				CNetServerSerializationBuf *pSendPacket;
 				CNetServerSerializationBuf *pPacket = pRecvMessage->Packet;
@@ -358,7 +358,7 @@ UINT CChatServer::SessionKeyHeartbeatChecker()
 			pMessage->Packet = SendBuf;
 			pMessage->wType = en_PACKET_CS_CHAT_REQ_HEARTBEAT;
 
-			m_pMessageQueue->M_Enqueue(pMessage);
+			m_pMessageQueue->Enqueue(pMessage);
 			SetEvent(m_hUpdateEvent);
 		}
 		else
@@ -419,7 +419,7 @@ int CChatServer::GetNumOfMessageInPoolChunk()
 
 int CChatServer::GetRestMessageInQueue()
 {
-	return m_pMessageQueue->M_GetUseCount();
+	return m_pMessageQueue->GetRestSize();
 }
 
 UINT CChatServer::GetUpdateTPSAndReset()

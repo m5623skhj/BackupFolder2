@@ -3,8 +3,9 @@
 #include <unordered_map>
 #include <string>
 
-#include "CommonSource/LockFreeQueueA.h"
-using namespace Olbbemi;
+//#include "CommonSource/LockFreeQueueA.h"
+//using namespace Olbbemi;
+#include "LockFreeQueue.h"
 
 #define dfMAX_SECTOR_X									51
 #define dfMAX_SECTOR_Y									51
@@ -29,7 +30,7 @@ using namespace Olbbemi;
 
 #define dfSESSIONKEY_SIZE								64
 
-#define dfHEARTBEAT_TIMEOVER							30
+#define dfHEARTBEAT_TIMEMAX								8
 
 // 외부 사용자가 에러를 기록하게 하고 싶은데
 // 특정 수 범위 이후에만 사용 가능하게 한다는 전제가 필요함
@@ -38,7 +39,6 @@ enum CHATSERVER_ERR
 {
 	NOT_IN_USER_MAP_ERR = 1001,
 	NOT_IN_USER_SECTOR_MAP_ERR,
-	NOT_IN_USER_ACCOUNTMAP_ERR,
 	INCORRECT_SESSION_KEY_ERR,
 	NOT_LOGIN_USER_ERR,
 	SERIALIZEBUF_SIZE_ERR,
@@ -55,6 +55,7 @@ class CChattingLanClient;
 struct st_SessionKey
 {
 	char SessionElement[64];
+	UINT64 SessionKeyLifeTime;
 };
 
 class CChatServer : public CNetServer
@@ -69,6 +70,7 @@ private:
 
 	struct st_USER
 	{
+		BYTE										byNumOfOverWriteSessionKey = 0;
 		BOOL										bIsLoginUser;
 		WORD										SectorX;
 		WORD										SectorY; 
@@ -86,22 +88,23 @@ private:
 
 	UINT											m_uiUpdateTPS;
 
-	UINT64											m_uiHeartBeatTime;
-	
 	UINT64											m_uiAccountNo;
 	CTLSMemoryPool<st_SessionKey>					*m_pSessionKeyMemoryPool;
 
 	CTLSMemoryPool<st_USER>							*m_pUserMemoryPool;
+	//CRITICAL_SECTION								m_SessionKeyMapCS;
+	CRITICAL_SECTION								*m_pSessionKeyMapCS;
 	std::unordered_map<UINT64, st_SessionKey*>		m_UserSessionKeyMap;
 	std::unordered_map<UINT64, st_USER*>			m_UserSessionMap;
 	std::unordered_map<UINT64, st_USER*>			m_UserSectorMap[dfMAX_SECTOR_Y][dfMAX_SECTOR_X];
 
 	CTLSMemoryPool<st_MESSAGE>						*m_pMessageMemoryPool;
-	C_LFQueue<st_MESSAGE*>							*m_pMessageQueue;
+	CLockFreeQueue<st_MESSAGE*>							*m_pMessageQueue;
 
 	CChattingLanClient								*m_pChattingLanClient;
 
 	HANDLE											m_hUpdateThreadHandle;
+	HANDLE											m_hSessionKeyHeartBeatThreadHandle;
 	HANDLE											m_hUpdateEvent;
 	HANDLE											m_hExitEvent;
 	
@@ -110,8 +113,10 @@ private:
 	static UINT __stdcall UpdateThread(LPVOID pChatServet);
 	UINT Updater();
 	static UINT __stdcall HeartbeatCheckThread(LPVOID pChatServet);
-	UINT HeartbeatChecker();
-	
+	UINT __stdcall  HeartbeatChecker();
+	static UINT __stdcall SessionKeyHeartbeatCheckThread(LPVOID pChatServet);
+	UINT __stdcall  SessionKeyHeartbeatChecker();
+
 	// Accept 후 접속처리 완료 후 호출
 	virtual void OnClientJoin(UINT64 JoinClientID/* Client 정보 / ClientID / 기타등등 */);
 	// Disconnect 후 호출
@@ -139,6 +144,7 @@ private:
 	bool PacketProc_PlayerLeave(UINT64 SessionID);
 	bool PacketProc_PlayerLoginFromLoginServer(CNetServerSerializationBuf *pRecvPacket);
 	void PacketProc_HeartBeat(CNetServerSerializationBuf *pRecvPacket, CNetServerSerializationBuf *pOutSendPacket);
+	void PacketProc_SessionKeyHeartBeat(CNetServerSerializationBuf *pRecvPacket);
 	bool PacketProc_SectorMove(CNetServerSerializationBuf *pRecvPacket, CNetServerSerializationBuf *pOutSendPacket, UINT64 SessionID);
 	bool PacketProc_ChatMessage(CNetServerSerializationBuf *pRecvPacket, CNetServerSerializationBuf *pOutSendPacket, UINT64 SessionID);
 	bool PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNetServerSerializationBuf *pOutSendPacket, UINT64 SessionID);
@@ -151,7 +157,8 @@ public:
 	bool ChattingServerStart(const WCHAR *szChatServerOptionFileName, const WCHAR *szChatServerLanClientFileName);
 	void ChattingServerStop();
 
-	bool LoginPacketRecvedFromLoginServer(UINT64 AccountNo, st_SessionKey *SessionKey);
+	bool LoginPacketRecvedFromLoginServer(UINT64 AccountNo, st_SessionKey *pSessionKey);
+	void OverWriteSessionKey(UINT64 AccountNo, st_SessionKey *pSessionKey);
 
 	int GetNumOfPlayer();
 	int GetNumOfAllocPlayer();
@@ -166,4 +173,10 @@ public:
 	int GetNumOfRecvJoinPacket();
 	int GetNumOfSessionKeyMiss();
 	int GetNumOfSessionKeyNotFound();
+
+	int GetUsingNetServerBufCount();
+	int GetUsingLanServerBufCount();
+
+	int GetUsingSessionKeyChunkCount();
+	int GetUsingSessionKeyNodeCount();
 };
