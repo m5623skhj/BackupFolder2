@@ -55,11 +55,18 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 
 	if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr)) == SOCKET_ERROR)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::LISTEN_BIND_ERR;
-		OnError(&Error);
-		return false;
+		while (1)
+		{
+			Sleep(1000);
+
+			if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr)) != SOCKET_ERROR)
+				break;
+		}
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::LISTEN_BIND_ERR;
+		//OnError(&Error);
+		//return false;
 	}
 	
 	retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&m_bIsNagleOn, sizeof(int));
@@ -100,6 +107,9 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 	m_IOCount = 1;
 	m_wNumOfReconnect = 0;
 	RecvPost();
+
+	if (InterlockedDecrement(&m_IOCount) == 0)
+		ReleaseSession();
 	OnConnectionComplete();
 
 	return true;
@@ -133,7 +143,7 @@ bool CNetClient::NetServerOptionParsing(const WCHAR *szOptionFileName)
 	fseek(fp, 0, SEEK_END);
 	int iFileSize = ftell(fp);
 	fseek(fp, iJumpBOM, SEEK_SET);
-	int FileSize = (int)fread_s(cBuffer, BUFFER_MAX, sizeof(WCHAR), BUFFER_MAX / 2, fp);
+	int FileSize = fread_s(cBuffer, 16384, sizeof(WCHAR), iFileSize / 2, fp);
 	int iAmend = iFileSize - FileSize; // 개행 문자와 파일 사이즈에 대한 보정값
 	fclose(fp);
 
@@ -202,11 +212,13 @@ bool CNetClient::ReleaseSession()
 
 	while (1)
 	{
-		if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr) != SOCKET_ERROR))
+		if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr)) != SOCKET_ERROR)
 			break;
 		Sleep(1000);
 	}
 
+	OnConnectionComplete();
+	
 	++m_wNumOfReconnect;
 	++m_IOCount;
 
