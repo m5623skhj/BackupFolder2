@@ -80,7 +80,6 @@ bool CNetServer::Start(const WCHAR *szOptionFileName)
 	}
 	m_uiNumOfUser = 0;
 
-
 	bool KeepAlive = true;
 	retval = setsockopt(m_ListenSock, SOL_SOCKET, SO_KEEPALIVE, (char*)&KeepAlive, sizeof(KeepAlive));
 	if(retval == SOCKET_ERROR)
@@ -223,7 +222,7 @@ bool CNetServer::ReleaseSession(Session *pSession)
 		return false;
 
 	int SendBufferRestSize = pSession->SendIOData.lBufferCount;
-	int Rest = pSession->SendIOData.SendQ.M_GetUseCount();
+	int Rest = pSession->SendIOData.SendQ.GetRestSize();
 	// SendPost 에서 옮겨졌으나 보내지 못한 직렬화 버퍼들을 반환함
 	for (int i = 0; i < SendBufferRestSize; ++i)
 		CNetServerSerializationBuf::Free(pSession->pSeirializeBufStore[i]);
@@ -234,7 +233,7 @@ bool CNetServer::ReleaseSession(Session *pSession)
 		CNetServerSerializationBuf *DeleteBuf;
 		for (int i = 0; i < Rest; ++i)
 		{
-			pSession->SendIOData.SendQ.M_Dequeue(DeleteBuf);
+			pSession->SendIOData.SendQ.Dequeue(&DeleteBuf);
 			CNetServerSerializationBuf::Free(DeleteBuf);
 		}
 	}
@@ -345,14 +344,20 @@ UINT CNetServer::Accepter()
 
 UINT CNetServer::Worker()
 {
-	char cPostRetval = -1;
+	char cPostRetval;
 	int retval;
-	DWORD Transferred = 0;
-	Session *pSession = NULL;
-	LPOVERLAPPED lpOverlapped = NULL;
+	DWORD Transferred;
+	Session *pSession;
+	LPOVERLAPPED lpOverlapped;
 
 	while (1)
 	{
+		cPostRetval = -1;
+		retval;
+		Transferred = 0;
+		pSession = NULL;
+		lpOverlapped = NULL;
+
 		GetQueuedCompletionStatus(m_hWorkerIOCP, &Transferred, (PULONG_PTR)&pSession, &lpOverlapped, INFINITE);
 		OnWorkerThreadBegin();
 		if (lpOverlapped != NULL)
@@ -573,7 +578,7 @@ bool CNetServer::SendPacket(UINT64 SessionID, CNetServerSerializationBuf *pSeria
 		pSerializeBuf->Encode();
 	}
 
-	m_pSessionArray[StackIndex].SendIOData.SendQ.M_Enqueue(pSerializeBuf);
+	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSerializeBuf);
 
 	SendPost(&m_pSessionArray[StackIndex]);
 
@@ -608,10 +613,10 @@ bool CNetServer::SendPacketAndDisConnect(UINT64 SessionID, CNetServerSerializati
 		pSendBuf->Encode();
 	}
 
-	m_pSessionArray[StackIndex].SendIOData.SendQ.M_Enqueue(pSendBuf);
+	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSendBuf);
 
-	SendPost(&m_pSessionArray[StackIndex]);
 	m_pSessionArray[StackIndex].bSendDisconnect = TRUE;
+	SendPost(&m_pSessionArray[StackIndex]);
 
 	SessionAcquireUnLock(StackIndex);
 	return true;
@@ -626,11 +631,11 @@ char CNetServer::SendPost(Session *pSession)
 		if (InterlockedCompareExchange(&SendSession.SendIOData.IOMode, SENDING, NONSENDING))
 			return true;
 
-		int UseSize = SendSession.SendIOData.SendQ.M_GetUseCount();
+		int UseSize = SendSession.SendIOData.SendQ.GetRestSize();
 		if (UseSize == 0)
 		{
 			InterlockedExchange(&SendSession.SendIOData.IOMode, NONSENDING);
-			if (SendSession.SendIOData.SendQ.M_GetUseCount() > 0)
+			if (SendSession.SendIOData.SendQ.GetRestSize() > 0)
 				continue;
 			return POST_RETVAL_COMPLETE;
 		}
@@ -651,7 +656,7 @@ char CNetServer::SendPost(Session *pSession)
 	
 		for (int i = 0; i < UseSize; ++i)
 		{
-			SendSession.SendIOData.SendQ.M_Dequeue(SendSession.pSeirializeBufStore[i]);
+			SendSession.SendIOData.SendQ.Dequeue(&SendSession.pSeirializeBufStore[i]);
 			wsaSendBuf[i].buf = SendSession.pSeirializeBufStore[i]->GetBufferPtr();
 			wsaSendBuf[i].len = SendSession.pSeirializeBufStore[i]->GetAllUseSize();
 		}

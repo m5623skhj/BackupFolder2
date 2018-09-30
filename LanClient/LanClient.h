@@ -16,8 +16,6 @@
 
 #define ONE_SEND_WSABUF_MAX					200
 
-#define dfRECONNECT_MAX						10
-
 #define df_RELEASE_VALUE					0x100000000
 
 struct st_Error;

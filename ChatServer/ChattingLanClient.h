@@ -38,16 +38,6 @@ private:
 	virtual void OnError(st_Error *OutError);
 
 private:
-
-	struct st_ServerInfo
-	{
-		BYTE	ServerType;			// dfSERVER_TYPE_GAME / dfSERVER_TYPE_CHAT
-		UINT64  ClientSessionID;
-		WCHAR	ServerName[32];		// 해당 서버의 이름. 
-	};
-
-	BYTE										m_byServerIndex;
-
 	UINT64										m_iIdentificationNumber;
 	CRITICAL_SECTION							m_SessionKeyMapCS;
 	CTLSMemoryPool<st_SessionKey>				*m_pSessionKeyMemoryPool;

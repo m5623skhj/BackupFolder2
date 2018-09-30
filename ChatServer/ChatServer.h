@@ -3,8 +3,6 @@
 #include <unordered_map>
 #include <string>
 
-//#include "CommonSource/LockFreeQueueA.h"
-//using namespace Olbbemi;
 #include "LockFreeQueue.h"
 
 #define dfMAX_SECTOR_X									51
@@ -51,6 +49,7 @@ enum CHATSERVER_ERR
 class Log;
 class CNetServerSerializationBuf;
 class CChattingLanClient;
+class CChatMonitoringLanClient;
 
 struct st_SessionKey
 {
@@ -86,22 +85,24 @@ private:
 	int												m_iNumOfSessionKeyMiss;
 	int												m_iNumOfSessionKeyNotFound;
 
+	UINT											m_uiNumOfSessionAll;
+	UINT											m_uiNumOfLoginCompleteUser;
 	UINT											m_uiUpdateTPS;
 
 	UINT64											m_uiAccountNo;
 	CTLSMemoryPool<st_SessionKey>					*m_pSessionKeyMemoryPool;
 
 	CTLSMemoryPool<st_USER>							*m_pUserMemoryPool;
-	//CRITICAL_SECTION								m_SessionKeyMapCS;
 	CRITICAL_SECTION								*m_pSessionKeyMapCS;
 	std::unordered_map<UINT64, st_SessionKey*>		m_UserSessionKeyMap;
 	std::unordered_map<UINT64, st_USER*>			m_UserSessionMap;
 	std::unordered_map<UINT64, st_USER*>			m_UserSectorMap[dfMAX_SECTOR_Y][dfMAX_SECTOR_X];
 
 	CTLSMemoryPool<st_MESSAGE>						*m_pMessageMemoryPool;
-	CLockFreeQueue<st_MESSAGE*>							*m_pMessageQueue;
+	CLockFreeQueue<st_MESSAGE*>						*m_pMessageQueue;
 
 	CChattingLanClient								*m_pChattingLanClient;
+	CChatMonitoringLanClient						*m_pMonitoringLanClient;
 
 	HANDLE											m_hUpdateThreadHandle;
 	HANDLE											m_hSessionKeyHeartBeatThreadHandle;
@@ -154,7 +155,7 @@ public:
 	CChatServer();
 	virtual ~CChatServer();
 
-	bool ChattingServerStart(const WCHAR *szChatServerOptionFileName, const WCHAR *szChatServerLanClientFileName);
+	bool ChattingServerStart(const WCHAR *szChatServerOptionFileName, const WCHAR *szChatServerLanClientFileName, const WCHAR *szMonitoringClientFileName);
 	void ChattingServerStop();
 
 	bool LoginPacketRecvedFromLoginServer(UINT64 AccountNo, st_SessionKey *pSessionKey);

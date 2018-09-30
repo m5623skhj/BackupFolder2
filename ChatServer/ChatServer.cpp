@@ -4,7 +4,7 @@
 #include "NetServerSerializeBuffer.h"
 #include "CommonProtocol.h"
 #include "ChattingLanClient.h"
-
+#include "ChatMonitoringLanClient.h"
 
 CChatServer::CChatServer() : 
 	m_uiAccountNo(0), m_uiUpdateTPS(0), m_iNumOfRecvJoinPacket(0), m_iNumOfSessionKeyMiss(0), 
@@ -17,23 +17,31 @@ CChatServer::~CChatServer()
 
 }
 
-bool CChatServer::ChattingServerStart(const WCHAR *szChatServerOptionFileName, const WCHAR *szChatServerLanClientFileName)
+bool CChatServer::ChattingServerStart(const WCHAR *szChatServerOptionFileName, const WCHAR *szChatServerLanClientFileName, const WCHAR *szMonitoringClientFileName)
 {
-	_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR", L"Start\n");
+	_LOG(LOG_LEVEL::LOG_DEBUG, L"ServerStart", L"Start\n");
 	m_pSessionKeyMemoryPool = new CTLSMemoryPool<st_SessionKey>(5, false);
 	m_pUserMemoryPool = new CTLSMemoryPool<st_USER>(20, false);
 	m_pMessageMemoryPool = new CTLSMemoryPool<st_MESSAGE>(30, false);
 	m_pMessageQueue = new CLockFreeQueue<st_MESSAGE*>;
 	m_pChattingLanClient = new CChattingLanClient();
+	//m_pMonitoringLanClient = new CChatMonitoringLanClient();
 
 	SetLogLevel(LOG_LEVEL::LOG_DEBUG);
 
 	m_hUpdateEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 	m_hExitEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+
+	m_uiNumOfSessionAll = 0;
+	m_uiNumOfLoginCompleteUser = 0;
+
 	if (!Start(szChatServerOptionFileName))
 		return false;
 	if (!m_pChattingLanClient->ChattingLanClientStart(this, szChatServerLanClientFileName, m_pSessionKeyMemoryPool, (UINT64)&m_UserSessionKeyMap))
 		return false;
+	//if(!m_pMonitoringLanClient->MonitoringLanClientStart(szMonitoringClientFileName, &m_uiNumOfSessionAll, &m_uiNumOfLoginCompleteUser))
+	//	return false;
+
 	m_hUpdateThreadHandle = (HANDLE)_beginthreadex(NULL, 0, UpdateThread, this, 0, NULL);
 	m_hSessionKeyHeartBeatThreadHandle = (HANDLE)_beginthreadex(NULL, 0, SessionKeyHeartbeatCheckThread, this, 0, NULL);
 
@@ -62,7 +70,8 @@ void CChatServer::ChattingServerStop()
 	for (auto iter = m_UserSessionMap.begin(); iter != iterEnd; ++iter)
 	{
 		delete (iter->second);
-		m_UserSessionMap.erase(iter);
+		iter = m_UserSessionMap.erase(iter);
+		--iter;
 	}
 
 	CloseHandle(m_hUpdateThreadHandle);
@@ -74,7 +83,7 @@ void CChatServer::ChattingServerStop()
 	delete m_pUserMemoryPool;
 	delete m_pSessionKeyMemoryPool;
 
-	_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR", L"End\n%d");
+	_LOG(LOG_LEVEL::LOG_DEBUG, L"ServerEnd", L"End\n%d");
 	WritingProfile();
 }
 
@@ -266,7 +275,6 @@ UINT CChatServer::Updater()
 					PacketProc_SessionKeyHeartBeat(pPacket);
 					break;
 					//PacketProc_HeartBeat(pPacket, pSendPacket);
-					break;
 				case en_PACKET_CS_CHAT_REQ_LOGIN:
 					pSendPacket = CNetServerSerializationBuf::Alloc();
 					PacketProc_Login(pPacket, pSendPacket, SessionID);

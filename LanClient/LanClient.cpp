@@ -62,8 +62,6 @@ bool CLanClient::Start(const WCHAR *szOptionFileName)
 		return false;
 	}
 
-	m_RecvIOData.RingBuffer.Resize(32768);
-
 	retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&m_bIsNagleOn, sizeof(int));
 	if (retval == SOCKET_ERROR)
 	{
@@ -74,6 +72,16 @@ bool CLanClient::Start(const WCHAR *szOptionFileName)
 
 	ZeroMemory(&m_RecvIOData.Overlapped, sizeof(OVERLAPPED));
 	ZeroMemory(&m_SendIOData.Overlapped, sizeof(OVERLAPPED));
+
+	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
+	if (m_hWorkerIOCP == NULL)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.ServerErr = SERVER_ERR::WORKERIOCP_NULL_ERR;
+		return false;
+	}
+	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, m_sock, 0);
 
 	m_pWorkerThreadHandle = new HANDLE[m_byNumOfWorkerThread];
 	// static 함수에서 LanClient 객체를 접근하기 위하여 this 포인터를 인자로 넘김
@@ -88,16 +96,6 @@ bool CLanClient::Start(const WCHAR *szOptionFileName)
 		return false;
 	}
 	m_byNumOfWorkerThread = m_byNumOfWorkerThread;
-
-	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 1);
-	if (m_hWorkerIOCP == NULL)
-	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::WORKERIOCP_NULL_ERR;
-		return false;
-	}
-	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, m_sock, 0);
 
 	m_IOCount = 1;
 	m_wNumOfReconnect = 0;
@@ -178,6 +176,18 @@ bool CLanClient::ReleaseSession()
 		}
 	}
 
+	closesocket(m_sock);
+	m_sock = INVALID_SOCKET;
+
+	m_sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (m_sock == INVALID_SOCKET)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.ServerErr = SERVER_ERR::LISTEN_SOCKET_ERR;
+		OnError(&Error);
+		return false;
+	}
 
 	SOCKADDR_IN serveraddr;
 	ZeroMemory(&serveraddr, sizeof(serveraddr));
@@ -185,21 +195,46 @@ bool CLanClient::ReleaseSession()
 	serveraddr.sin_family = AF_INET;
 	serveraddr.sin_port = htons(m_wPort);
 
-	int ConnectCnt = 0;
+	_LOG(LOG_LEVEL::LOG_WARNING, L"LanClient", L"ReConnection %d / ThreadID : %d", m_wNumOfReconnect, GetCurrentThreadId());
 
 	while (1)
 	{
-		if(connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr) != SOCKET_ERROR))
+		if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr)) != SOCKET_ERROR)
 			break;
-		else if (ConnectCnt >= dfRECONNECT_MAX)
-		{
-			_LOG(LOG_LEVEL::LOG_SYSTEM, L"SYSTEM", L" : Reconnect Over Err : %d\n", GetLastError());
-			g_Dump.Crash();
-		}
+		Sleep(1000);
 	}
+
+	int retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&m_bIsNagleOn, sizeof(int));
+	if (retval == SOCKET_ERROR)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		return false;
+	}
+
+	int SendBufSize = 0;
+	retval = setsockopt(m_sock, SOL_SOCKET, SO_SNDBUF, (char*)&SendBufSize, sizeof(SendBufSize));
+	if (retval == SOCKET_ERROR)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		OnError(&Error);
+		return false;
+	}
+
+
+	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, (ULONG_PTR)&m_sock, 0);
+
+	RecvPost();
 
 	++m_wNumOfReconnect;
 	++m_IOCount;
+
+	if (InterlockedDecrement(&m_IOCount) == 0)
+		ReleaseSession();
+	OnConnectionComplete();
 
 	return true;
 }
@@ -224,17 +259,10 @@ UINT CLanClient::Worker()
 
 		GetQueuedCompletionStatus(m_hWorkerIOCP, &Transferred, (PULONG_PTR)&pSession, &lpOverlapped, INFINITE);
 		OnWorkerThreadBegin();
-		if (lpOverlapped == NULL)
-		{
-			st_Error Error;
-			Error.GetLastErr = WSAGetLastError();
-			Error.ServerErr = SERVER_ERR::OVERLAPPED_NULL_ERR;
-			OnError(&Error);
-			continue;
-		}
 		// GQCS 에 완료 통지가 왔을 경우
-		else
+		if (lpOverlapped != NULL)
 		{
+
 			// 외부 종료코드에 의한 종료
 			if (pSession == NULL)
 			{
@@ -251,7 +279,7 @@ UINT CLanClient::Worker()
 					// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
 					m_IOCount = InterlockedDecrement(&m_IOCount);
 					if (m_IOCount == 0)
-						printf("A");
+						ReleaseSession();
 
 					continue;
 				}
@@ -264,11 +292,14 @@ UINT CLanClient::Worker()
 					CSerializationBuf &RecvSerializeBuf = *CSerializationBuf::Alloc();
 					RecvSerializeBuf.m_iRead = 0;
 					retval = RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, HEADER_SIZE);
+					if (retval < HEADER_SIZE)
+					{
+						CSerializationBuf::Free(&RecvSerializeBuf);
+						break;
+					}
 					// PayloadLength 2
 					WORD PayloadLength;
 					RecvSerializeBuf >> PayloadLength;
-					if (PayloadLength == 0)
-						printf("A");
 
 					if (RecvIOData.RingBuffer.GetUseSize() < PayloadLength + HEADER_SIZE)
 					{
@@ -320,6 +351,15 @@ UINT CLanClient::Worker()
 				cPostRetval = SendPost();
 			}
 		}
+		else
+		{
+			st_Error Error;
+			Error.GetLastErr = WSAGetLastError();
+			Error.ServerErr = SERVER_ERR::OVERLAPPED_NULL_ERR;
+			OnError(&Error);
+
+			g_Dump.Crash();
+		}
 
 		OnWorkerThreadEnd();
 
@@ -327,7 +367,7 @@ UINT CLanClient::Worker()
 			continue;
 		m_IOCount = InterlockedDecrement(&m_IOCount);
 		if (m_IOCount == 0)
-			printf("A");
+			ReleaseSession();
 	}
 
 	CSerializationBuf::ChunkFreeForcibly();
@@ -349,7 +389,7 @@ char CLanClient::RecvPost()
 		m_IOCount = InterlockedDecrement(&m_IOCount);
 		if (m_IOCount == 0)
 		{
-			printf("A");
+			ReleaseSession();
 			return POST_RETVAL_ERR_SESSION_DELETED;
 		}
 		return POST_RETVAL_ERR;
@@ -380,7 +420,7 @@ char CLanClient::RecvPost()
 			m_IOCount = InterlockedDecrement(&m_IOCount);
 			if (m_IOCount == 0)
 			{
-				printf("A");
+				ReleaseSession();
 				return POST_RETVAL_ERR_SESSION_DELETED;
 			}
 			st_Error Error;
@@ -456,7 +496,7 @@ char CLanClient::SendPost()
 			m_IOCount = InterlockedDecrement(&m_IOCount);
 			if (m_IOCount == 0)
 			{
-				printf("A");
+				ReleaseSession();
 				return POST_RETVAL_ERR_SESSION_DELETED;
 			}
 			InterlockedExchange(&SendIOData.IOMode, NONSENDING);
@@ -493,7 +533,7 @@ char CLanClient::SendPost()
 				m_IOCount = InterlockedDecrement(&m_IOCount);
 				if (m_IOCount == 0)
 				{
-					printf("A");
+					ReleaseSession();
 					return POST_RETVAL_ERR_SESSION_DELETED;
 				}
 

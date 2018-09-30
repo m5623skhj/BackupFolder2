@@ -90,6 +90,7 @@ public:
 	virtual ~CNetClient();
 
 	bool SendPacket(CNetServerSerializationBuf *pSerializeBuf);
+
 	// 서버에 Connect 가 완료 된 후
 	virtual void OnConnectionComplete() = 0;
 

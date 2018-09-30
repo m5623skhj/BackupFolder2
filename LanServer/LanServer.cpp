@@ -74,7 +74,6 @@ bool CLanServer::Start(const WCHAR *szOptionFileName)
 		return false;
 	}
 
-
 	m_pSessionArray = new Session[m_uiMaxClient];
 	m_pSessionIndexStack = new CLockFreeStack<WORD>();
 	for (int i = m_uiMaxClient - 1; i >= 0; --i)
@@ -138,7 +137,7 @@ void CLanServer::Stop()
 		}
 	}
 
-	PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, NULL);
+	PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, (LPOVERLAPPED)1);
 	WaitForMultipleObjects(m_byNumOfWorkerThread, m_pWorkerThreadHandle, TRUE, INFINITE);
 
 	delete[] m_pSessionArray;
@@ -448,7 +447,8 @@ UINT CLanServer::Worker()
 			Error.GetLastErr = WSAGetLastError();
 			Error.ServerErr = SERVER_ERR::OVERLAPPED_NULL_ERR;
 			OnError(&Error);
-			continue;
+
+			g_Dump.Crash();
 		}
 		OnWorkerThreadEnd();
 

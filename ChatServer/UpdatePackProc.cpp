@@ -22,12 +22,16 @@ bool CChatServer::PacketProc_PlayerJoin(UINT64 SessionID)
 	NewClient.uiBeforeRecvTime = dfHEARTBEAT_TIMEMAX;
 
 	m_UserSessionMap.insert({ SessionID, &NewClient });
+	++m_uiNumOfSessionAll;
 
 	return true;
 }
 
 bool CChatServer::PacketProc_PlayerLeave(UINT64 SessionID)
 {
+	--m_uiNumOfSessionAll;
+	--m_uiNumOfLoginCompleteUser;
+
 	st_USER &LeaveClient = *m_UserSessionMap.find(SessionID)->second;
 	if (&LeaveClient == m_UserSessionMap.end()->second)
 		return false;
@@ -306,7 +310,8 @@ void CChatServer::PacketProc_SessionKeyHeartBeat(CNetServerSerializationBuf *pRe
 		if (SessionKeyLifeTime <= 0)
 		{
 			m_pSessionKeyMemoryPool->Free(TravelIter->second);
-			m_UserSessionKeyMap.erase(TravelIter);
+			TravelIter = m_UserSessionKeyMap.erase(TravelIter);
+			--TravelIter;
 		}
 	}
 
@@ -388,6 +393,7 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 
 	CNetServerSerializationBuf::AddRefCount(&SendBuf);
 	SendPacket(SessionID, &SendBuf);
+	++m_uiNumOfLoginCompleteUser;
 
 	return true;
 }

@@ -97,7 +97,7 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 		Error.ServerErr = SERVER_ERR::WORKERIOCP_NULL_ERR;
 		return false;
 	}
-	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, m_sock, 0);
+	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, (ULONG_PTR)&m_sock, 0);
 
 	m_pWorkerThreadHandle = new HANDLE[m_byNumOfWorkerThread];
 	// static 함수에서 NetServer 객체를 접근하기 위하여 this 포인터를 인자로 넘김
@@ -181,8 +181,8 @@ bool CNetClient::NetServerOptionParsing(const WCHAR *szOptionFileName)
 
 bool CNetClient::ReleaseSession()
 {
-	if (InterlockedCompareExchange64((LONG64*)&m_IOCount, 0, df_RELEASE_VALUE) != df_RELEASE_VALUE)
-		return false;
+	//if (InterlockedCompareExchange64((LONG64*)&m_IOCount, 0, df_RELEASE_VALUE) != df_RELEASE_VALUE)
+	//	return false;
 
 	int SendBufferRestSize = m_SendIOData.lBufferCount;
 	int Rest = m_SendIOData.SendQ.GetRestSize();
@@ -201,6 +201,19 @@ bool CNetClient::ReleaseSession()
 		}
 	}
 
+	closesocket(m_sock);
+	m_sock = INVALID_SOCKET;
+
+	m_sock = socket(AF_INET, SOCK_STREAM, 0);
+	if (m_sock == INVALID_SOCKET)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.ServerErr = SERVER_ERR::LISTEN_SOCKET_ERR;
+		OnError(&Error);
+		return false;
+	}
+
 	SOCKADDR_IN serveraddr;
 	ZeroMemory(&serveraddr, sizeof(serveraddr));
 	InetPton(AF_INET, m_IP, &serveraddr.sin_addr);
@@ -212,15 +225,42 @@ bool CNetClient::ReleaseSession()
 
 	while (1)
 	{
-		if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr)) != SOCKET_ERROR)
+		if (connect(m_sock, (SOCKADDR*)&serveraddr, sizeof(serveraddr)) != SOCKET_ERROR )
 			break;
 		Sleep(1000);
 	}
 
-	OnConnectionComplete();
-	
+	int retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&m_bIsNagleOn, sizeof(int));
+	if (retval == SOCKET_ERROR)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		return false;
+	}
+
+	int SendBufSize = 0;
+	retval = setsockopt(m_sock, SOL_SOCKET, SO_SNDBUF, (char*)&SendBufSize, sizeof(SendBufSize));
+	if (retval == SOCKET_ERROR)
+	{
+		st_Error Error;
+		Error.GetLastErr = WSAGetLastError();
+		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		OnError(&Error);
+		return false;
+	}
+
+
+	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, (ULONG_PTR)&m_sock, 0);
+
+	RecvPost();
+
 	++m_wNumOfReconnect;
 	++m_IOCount;
+
+	if (InterlockedDecrement(&m_IOCount) == 0)
+		ReleaseSession();
+	OnConnectionComplete();
 
 	return true;
 }
@@ -257,7 +297,7 @@ UINT CNetClient::Worker()
 			SOCKET &IOCompleteSession = *pSession;
 			if (lpOverlapped == &RecvIOData.Overlapped)
 			{
-				// 클라이언트가 종료함
+				// 서버가 종료함(~ 끊김)
 				if (Transferred == 0)
 				{
 					// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함

@@ -1,13 +1,9 @@
 #pragma once
 #include <unordered_map>
 #include "Ringbuffer.h"
-//#include "Stack.h"
 #include "LockFreeStack.h"
-#include "CommonSource/LockFreeQueueA.h"
+#include "LockFreeQueue.h"
 #include "ServerCommon.h"
-
-using namespace Olbbemi;
-#include <map>
 
 // 해당 소켓이 송신중에 있는지 아닌지
 #define NONSENDING	0
@@ -26,6 +22,8 @@ using namespace Olbbemi;
 struct st_Error;
 
 class CNetServerSerializationBuf;
+
+//using namespace Olbbemi;
 
 class CNetServer
 {
@@ -61,7 +59,7 @@ private:
 		UINT										IOMode;
 		OVERLAPPED									Overlapped;
 		
-		C_LFQueue<CNetServerSerializationBuf*>		SendQ;
+		CLockFreeQueue<CNetServerSerializationBuf*>		SendQ;
 	};
 
 	enum en_CALL_WHERER
