@@ -156,6 +156,11 @@ bool CLanClient::LanClientOptionParsing(const WCHAR *szOptionFileName)
 
 bool CLanClient::ReleaseSession()
 {
+	//////////////////////////
+	g_Dump.Crash();
+	//////////////////////////
+
+
 	if (InterlockedCompareExchange64((LONG64*)&m_IOCount, 0, df_RELEASE_VALUE) != df_RELEASE_VALUE)
 		return false;
 
@@ -444,15 +449,14 @@ bool CLanClient::SendPacket(CSerializationBuf *pSerializeBuf)
 		return false;
 	}
 	
-	if (InterlockedIncrement(&m_IOCount) == 1)
-	{
-		CSerializationBuf::Free(pSerializeBuf);
-		InterlockedDecrement(&m_IOCount);
-		//if (m_pSessionArray.IsUseSession)
-		//	ReleaseSession(&m_pSessionArray);
-
-		return false;
-	}
+	//if (InterlockedIncrement(&m_IOCount) == 1)
+	//{
+	//	CSerializationBuf::Free(pSerializeBuf);
+	//	InterlockedDecrement(&m_IOCount);
+	//	//if (m_pSessionArray.IsUseSession)
+	//	//	ReleaseSession(&m_pSessionArray);
+	//	return false;
+	//}
 	
 	WORD PayloadSize = pSerializeBuf->GetUseSize();
 	pSerializeBuf->m_iWriteLast = pSerializeBuf->m_iWrite;
@@ -463,13 +467,12 @@ bool CLanClient::SendPacket(CSerializationBuf *pSerializeBuf)
 	m_SendIOData.SendQ.Enqueue(pSerializeBuf);
 	SendPost();
 
-	if (InterlockedDecrement(&m_IOCount) == 0)
-	{
-		//if (m_pSessionArray.IsUseSession)
-		//	ReleaseSession(&m_pSessionArray);
-
-		return false;
-	}
+	//if (InterlockedDecrement(&m_IOCount) == 0)
+	//{
+	//	//if (m_pSessionArray.IsUseSession)
+	//	//	ReleaseSession(&m_pSessionArray);
+	//	return false;
+	//}
 
 	return true;
 }
