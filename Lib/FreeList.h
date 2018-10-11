@@ -1,4 +1,5 @@
 #pragma once
+#include "PreCompile.h"
 #include <new.h>
 #include <stdlib.h>
 
@@ -115,9 +116,10 @@ Data *CFreeList<Data>::Alloc()
 template <typename Data>
 void CFreeList<Data>::Free(Data *pData)
 {
-	st_BLOCK_NODE *temp = (st_BLOCK_NODE*)(pData - 8);
+	st_BLOCK_NODE *temp = (st_BLOCK_NODE*)((char*)pData - 8);
 	if (temp->iCode != NODE_CODE)
-		return;
+		g_Dump.Crash();
+		//return;
 
 	temp->stpNextBlock = m_pTop;
 	m_pTop = temp;
