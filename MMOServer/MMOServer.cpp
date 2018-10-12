@@ -148,7 +148,10 @@ bool CMMOServer::Start(const WCHAR *szMMOServerOptionFileName)
 	for (int i = 0; i < m_byNumOfWorkerThread; i++)
 		m_pWorkerThreadHandle[i] = (HANDLE)_beginthreadex(NULL, 0, WorkerThreadStartAddress, this, 0, NULL);
 	m_hAcceptThread = (HANDLE)_beginthreadex(NULL, 0, AcceptThreadStartAddress, this, 0, NULL);
-	m_hSendThread = (HANDLE)_beginthreadex(NULL, 0, SendThreadStartAddress, this, 0, NULL);
+	
+	m_hSendThread[0] = (HANDLE)_beginthreadex(NULL, 0, SendThreadStartAddress, this, 0, NULL);
+	m_hSendThread[1] = (HANDLE)_beginthreadex(NULL, 0, SendThreadStartAddress, this, 0, NULL);
+	
 	m_hAuthThread = (HANDLE)_beginthreadex(NULL, 0, AuthThreadStartAddress, this, 0, NULL);
 	m_hGameThread = (HANDLE)_beginthreadex(NULL, 0, GameThreadStartAddress, this, 0, NULL);
 
@@ -177,10 +180,10 @@ void CMMOServer::Stop()
 		}
 	}
 
-	for (int i = 0; i < en_EVENT_NUMBER::NUM_OF_EVENT; ++i)
+	for (int i = 0; i < dfNUM_OF_THREAD; ++i)
 		SetEvent(m_hThreadExitEvent[i]);
 
-	WaitForMultipleObjects(en_EVENT_NUMBER::NUM_OF_EVENT, m_hThreadExitEvent, TRUE, INFINITE);
+	WaitForMultipleObjects(dfNUM_OF_THREAD, m_hThreadExitEvent, TRUE, INFINITE);
 
 	PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, (LPOVERLAPPED)1);
 	WaitForMultipleObjects(m_byNumOfWorkerThread, m_pWorkerThreadHandle, TRUE, INFINITE);
@@ -194,7 +197,7 @@ void CMMOServer::Stop()
 	delete[] m_ppSessionPointerArray;
 
 	CloseHandle(m_hAcceptThread);
-	for (int i = 0; i < en_EVENT_NUMBER::NUM_OF_EVENT; ++i)
+	for (int i = 0; i < dfNUM_OF_THREAD; ++i)
 		CloseHandle(m_hThreadExitEvent[i]);
 
 	for (int i = 0; i < m_byNumOfUsingWorkerThread; ++i)
@@ -294,10 +297,14 @@ UINT CMMOServer::WorkerThread()
 				IOCompleteSession.m_RecvIOData.RecvRingBuffer.MoveWritePos(Transferred);
 				int RingBufferRestSize = IOCompleteSession.m_RecvIOData.RecvRingBuffer.GetUseSize();
 
+				// 해당 세션에 링버퍼 크기가 NetServer 직렬화 버퍼 헤더 사이즈보다 크면
 				while (RingBufferRestSize > df_HEADER_SIZE)
 				{
+					// 새 직렬화 버퍼를 할당 받음
 					CNetServerSerializationBuf &RecvSerializeBuf = *CNetServerSerializationBuf::Alloc();
+					// 패킷의 크기가 얼마인지 알 수 없으므로 Peek 함수를 이용하여 데이터만 복사함
 					IOCompleteSession.m_RecvIOData.RecvRingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, df_HEADER_SIZE);
+					// 직렬화 버퍼 Read 가 (헤더로 인하여)5 이므로 임의로 0으로 변경함
 					RecvSerializeBuf.m_iRead = 0;
 
 					BYTE Code;
@@ -327,8 +334,11 @@ UINT CMMOServer::WorkerThread()
 						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
 						break;
 					}
+					// 위 조건문들에서 링버퍼가 가지고 있는 사이즈가 크거나 같은게 판단되었으므로
+					// 헤더 사이즈를 지움
 					IOCompleteSession.m_RecvIOData.RecvRingBuffer.RemoveData(df_HEADER_SIZE);
 
+					// 할당받은 직렬화 버퍼에 데이터를 복사함과 동시에 지움
 					retval = IOCompleteSession.m_RecvIOData.RecvRingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
 					RecvSerializeBuf.m_iWrite += retval;
 					if (!RecvSerializeBuf.Decode())
@@ -343,6 +353,8 @@ UINT CMMOServer::WorkerThread()
 					}
 
 					RingBufferRestSize -= (retval + df_HEADER_SIZE);
+					// Auth 혹은 Game 스레드가 처리해 주기를 기대하고
+					// 각 세션이 지니고 있는 Recv완료큐 에 넣어줌
 					IOCompleteSession.m_RecvCompleteQueue.Enqueue(&RecvSerializeBuf);
 					InterlockedIncrement(&RecvTPS);
 				}
@@ -359,14 +371,16 @@ UINT CMMOServer::WorkerThread()
 					CNetServerSerializationBuf::Free(IOCompleteSession.pSeirializeBufStore[i]);
 
 				InterlockedAdd((LONG*)&SendTPS, BufferCount);
+				// 정상적으로 처리가 완료되었을 경우 버퍼 카운터가 0이 됨
+				// 버퍼 카운터는 SendThread 에서만 접근하기 때문임
 				IOCompleteSession.m_SendIOData.uiBufferCount = 0;
 
-				InterlockedExchange(&IOCompleteSession.m_uiSendIOMode, NONSENDING);
-				//IOCompleteSession.m_uiSendIOMode = NONSENDING;
+				IOCompleteSession.m_bSendIOMode = NONSENDING;
 				cPostRetval = POST_RETVAL_COMPLETE;
 				End("Send");
 			}
 		}
+		// overlapped 가 NULL 이면 정상적인 상황이라고 간주하지 않음
 		else
 		{
 			st_Error Error;
@@ -377,8 +391,11 @@ UINT CMMOServer::WorkerThread()
 			g_Dump.Crash();
 		}
 
+		// 이미 세션이 함수부에서 지워졌다면 다시 위로 올라감
 		if (cPostRetval == POST_RETVAL_ERR_SESSION_DELETED)
 			continue;
+		// 세션의 IOCount 를 깎고 0 이면 다른 스레드가 지워주길 기대하며
+		// 플래그를 true 로 변경함
 		if (InterlockedDecrement(&pSession->m_uiIOCount) == 0)
 			pSession->m_bLogOutFlag = true;
 	}
@@ -398,12 +415,18 @@ UINT CMMOServer::SendThread()
 	
 	CSession **SessionPointerArray = m_ppSessionPointerArray;
 
+	UINT SendThreadLoopStart = InterlockedExchange(&m_uiSendThreadLoopStartValue, m_uiSendThreadLoopStartValue + 1);
+	UINT i;
+
 	while (1)
 	{
+		// Stop 함수가 이벤트를 Set 하지 않는 이상 계속해서 SendThreadSleepTime 을 주기로 반복함
 		if (WaitForSingleObject(SendThreadEvent, SendThreadSleepTime) == WAIT_TIMEOUT)
 		{
 			InterlockedIncrement(&SendThreadLoop);
-			for (UINT i = 0; i < NumOfMaxClient; ++i)
+			i = SendThreadLoopStart;
+			// Send 스레드를 2개로 나눴기 때문에 2를 더함
+			for (; i < NumOfMaxClient; i += 2)
 			{
 				CSession &SendSession = *SessionPointerArray[i];
 
@@ -412,38 +435,24 @@ UINT CMMOServer::SendThread()
 					if (SendSession.m_SendIOData.uiBufferCount > 0)
 						break;
 
-					// SENDING / NONSENDING 상태를 Interlocked 로 처리 할 필요 없음
-					if (InterlockedExchange(&SendSession.m_uiSendIOMode, SENDING) != NONSENDING)
+					if (SendSession.m_bSendIOMode == NONSENDING)
+						SendSession.m_bSendIOMode = SENDING;
+					else
 						break;
-					//if (SendSession.m_uiSendIOMode == NONSENDING)
-					//	SendSession.m_uiSessionID = SENDING;
-					//else
-					//	break;
 
 					if (SendSession.m_bLogOutFlag)
 					{
-						//SendSession.m_uiSendIOMode = NONSENDING;
-						InterlockedExchange(&SendSession.m_uiSendIOMode, NONSENDING);
+						SendSession.m_bSendIOMode = NONSENDING;
 						break;
 					}
-
-					// LogOutFlag 확인하는 거랑 동일함
-					//BYTE NowMode = SendSession.m_byNowMode;
-					//if (NowMode != CSession::MODE_AUTH && NowMode != CSession::MODE_AUTH_TO_GAME
-					//	&& NowMode != CSession::MODE_GAME)
-					//{
-					//	InterlockedExchange(&SendSession.m_uiSendIOMode, NONSENDING);
-					//	break;
-					//}
 
 					int SendQUseSize = SendSession.m_SendIOData.SendQ.GetRestSize();
 					if (SendQUseSize == 0)
 					{
-						InterlockedExchange(&SendSession.m_uiSendIOMode, NONSENDING);
-						//SendSession.m_uiSendIOMode = NONSENDING;
+						SendSession.m_bSendIOMode = NONSENDING;
 						// 굳이 필요 없을 듯 함
-						if (SendSession.m_SendIOData.SendQ.GetRestSize() > 0)
-							continue;
+						//if (SendSession.m_SendIOData.SendQ.GetRestSize() > 0)
+							//continue;
 						break;
 					}
 					//else if (SendQUseSize < 0)
@@ -455,6 +464,7 @@ UINT CMMOServer::SendThread()
 
 					Begin("SendBufInit");
 					WSABUF wsaSendBuf[dfONE_SEND_WSABUF_MAX];
+					// 지정한 사이즈 만큼만 보낼것임
 					if (dfONE_SEND_WSABUF_MAX < SendQUseSize)
 						SendQUseSize = dfONE_SEND_WSABUF_MAX;
 
@@ -465,6 +475,9 @@ UINT CMMOServer::SendThread()
 						wsaSendBuf[SendCount].len = SendSession.pSeirializeBufStore[SendCount]->GetAllUseSize();
 					}
 
+					// 대입된 값은 배열 내부에 얼마나 직렬화 버퍼가 남아있는지를 판단하기 위한 값임
+					// 대입된 값은 완료통지에서 0으로 바꿔지거나
+					// 혹은 실패하였을 경우 Game 스레드가 안에 있는 릴리즈 파트에서 0으로 바꿀것임
 					SendSession.m_SendIOData.uiBufferCount = SendQUseSize;
 
 					InterlockedIncrement(&SendSession.m_uiIOCount);
@@ -490,8 +503,9 @@ UINT CMMOServer::SendThread()
 							//else
 							//	shutdown(SendSession.m_pUserNetworkInfo->AcceptedSock, SD_BOTH);
 
-							InterlockedExchange(&SendSession.m_uiSendIOMode, NONSENDING);
-							//SendSession.m_uiSendIOMode = NONSENDING;
+							// 릴리즈 조건이 Send 상태가 아니여야 되므로 강제로 NONSENDING 상태로 변경함
+							//InterlockedExchange(&SendSession.m_bSendIOMode, NONSENDING);
+							SendSession.m_bSendIOMode = NONSENDING;
 							End("WSASend");
 							break;
 						}
@@ -521,12 +535,15 @@ UINT CMMOServer::AuthThread()
 	
 	while (1)
 	{
+		// Stop 함수가 이벤트를 Set 하지 않는 이상 계속해서 AuthThreadSleepTime 을 주기로 반복함
 		if (WaitForSingleObject(AuthThreadEvent, AuthThreadSleepTime) == WAIT_TIMEOUT)
 		{
 			Begin("AuthLoop");
 			InterlockedIncrement(&AuthThreadLoop);
+			// 현재 얼마만큼의 유저가 큐에서 대기중인지 확인함
 			int NumOfAcceptWaitingUser = m_AcceptUserInfoQueue.GetRestSize();
 
+			// 지정한 값 보다 처리해줄 개수가 많다면 지정한 값 만큼만 처리하게 값을 변경함
 			if (NumOfAuthProgress < NumOfAcceptWaitingUser)
 				NumOfAcceptWaitingUser = NumOfAuthProgress;
 
@@ -545,8 +562,11 @@ UINT CMMOServer::AuthThread()
 					(ULONG_PTR)SessionPointerArray[SessionIndex], NULL);
 
 				LoginSession.OnAuth_ClientJoin();
+				LoginSession.m_bLogOutFlag = false;
 
 				RecvPost(&LoginSession);
+				// 현재 모드를 바꾸면 이 객체에 대한 처리가 시작되므로
+				// 가장 마지막에 바꿔줌
 				LoginSession.m_byNowMode = CSession::en_SESSION_MODE::MODE_AUTH;
 
 				InterlockedIncrement(&NumOfAuthPlayer);
@@ -561,13 +581,19 @@ UINT CMMOServer::AuthThread()
 					continue;
 				
 				CNetServerSerializationBuf *RecvPacket;
+				// 지정한 수 만큼만 완료통지가 온 패킷을 처리함
 				for (int NumOfDequeue = 0; NumOfDequeue < LoopAuthHandlingPacket; ++NumOfDequeue)
 				{
 					if (NowSession.m_RecvCompleteQueue.Dequeue(&RecvPacket))
 					{
 						NowSession.OnAuth_Packet(RecvPacket);
 						CNetServerSerializationBuf::Free(RecvPacket);
+						// 외부에서 Game 모드로 변경했다면 
+						// 더이상 Auth 에서는 처리하면 안되므로 반복문을 탈출함
+						if (NowSession.m_bAuthToGame == true)
+							break;
 					}
+					// 더이상 처리할 패킷이 없으면 반복문을 탈출함
 					else
 						break;
 				}
@@ -581,7 +607,8 @@ UINT CMMOServer::AuthThread()
 				
 				if (NowSession.m_bLogOutFlag)
 				{
-					if (NowSession.m_byNowMode == CSession::en_SESSION_MODE::MODE_AUTH && NowSession.m_uiSendIOMode == NONSENDING)
+					// Auth 모드이고 Send 중이 아닌 세션만 로그아웃 대기 상태로 진입이 가능함
+					if (NowSession.m_byNowMode == CSession::en_SESSION_MODE::MODE_AUTH && NowSession.m_bSendIOMode == NONSENDING)
 					{
 						NowSession.m_byNowMode = CSession::en_SESSION_MODE::MODE_WAIT_LOGOUT;
 						NowSession.OnAuth_ClientLeave(true);
@@ -589,8 +616,10 @@ UINT CMMOServer::AuthThread()
 						InterlockedDecrement(&NumOfAuthPlayer);
 					}
 				}
-				else if (NowSession.m_bAuthToGame && NowSession.m_byNowMode == CSession::en_SESSION_MODE::MODE_AUTH)
+				// 게임으로 넘어갈 세션이고 동시에 모드가 Auth 모드면
+				else if (NowSession.m_byNowMode == CSession::en_SESSION_MODE::MODE_AUTH && NowSession.m_bAuthToGame )
 				{
+					// Game 스레드가 이 세션을 가져갈 수 있도록 상태를 변경함
 					NowSession.m_byNowMode = CSession::en_SESSION_MODE::MODE_AUTH_TO_GAME;
 					NowSession.OnAuth_ClientLeave(false);
 
@@ -623,6 +652,7 @@ UINT CMMOServer::GameThread()
 
 	while (1)
 	{
+		// Stop 함수가 이벤트를 Set 하지 않는 이상 계속해서 GameThreadSleepTime 을 주기로 반복함
 		if (WaitForSingleObject(GameThreadEvent, GameThreadSleepTime) == WAIT_TIMEOUT)
 		{
 			Begin("GameLoop");
@@ -633,8 +663,10 @@ UINT CMMOServer::GameThread()
 			for (UINT i = ModeChangeStartPoint; i < NumOfMaxClient; ++i)
 			{
 				CSession &NowSession = *SessionPointerArray[i];
+				// Auth 에서 Game 으로 넘어오려는 세션이라면
 				if (NowSession.m_byNowMode == CSession::en_SESSION_MODE::MODE_AUTH_TO_GAME)
 				{
+					// 모드를 Game 으로 변경함
 					NowSession.m_byNowMode = CSession::en_SESSION_MODE::MODE_GAME;
 					NowSession.OnGame_ClientJoin();
 
@@ -643,15 +675,19 @@ UINT CMMOServer::GameThread()
 
 					InterlockedIncrement(&NumOfGamePlayer);
 
+					// 지정한 처리 횟수보다 반복문에서 처리한게 크거나 같으면 반복문을 탈출함
 					if (NumOfModeChangeCycle >= NumOfGameProgress)
 					{
+						// 반복한 횟수가 클라이언트 최대치면
 						if (i == NumOfMaxClient - 1)
+							// 반복문 시작값을 0으로 변경함
 							ModeChangeStartPoint = 0;
 						break;
 					}
 				}
 			}
 
+			// 지정한 처리횟수가 처리 횟수보다 크면 처리 횟수를 0으로 변경함
 			if (NumOfModeChangeCycle < NumOfGameProgress)
 				ModeChangeStartPoint = 0;
 			End("AuthToGame");
@@ -665,6 +701,7 @@ UINT CMMOServer::GameThread()
 					continue;
 
 				CNetServerSerializationBuf *RecvPacket;
+				// 지정한 처리 횟수만큼만 처리함
 				for (int NumOfDequeue = 0; NumOfDequeue < LoopGameHandlingPacket; ++NumOfDequeue)
 				{
 					if (NowSession.m_RecvCompleteQueue.Dequeue(&RecvPacket))
@@ -672,6 +709,7 @@ UINT CMMOServer::GameThread()
 						NowSession.OnGame_Packet(RecvPacket);
 						CNetServerSerializationBuf::Free(RecvPacket);
 					}
+					// 더이상 완료된 패킷이 없다면 반복문을 탈출함
 					else
 						break;
 				}
@@ -686,8 +724,10 @@ UINT CMMOServer::GameThread()
 				CSession &NowSession = *SessionPointerArray[i];
 				if (NowSession.m_bLogOutFlag)
 				{			
-					if (NowSession.m_byNowMode == CSession::en_SESSION_MODE::MODE_GAME && NowSession.m_uiSendIOMode == NONSENDING)
+					// Game 상태이고 Send 중이 아니라면 
+					if (NowSession.m_byNowMode == CSession::en_SESSION_MODE::MODE_GAME && NowSession.m_bSendIOMode == NONSENDING)
 					{
+						// 로그아웃 대기 상태로 변경함
 						NowSession.m_byNowMode = CSession::en_SESSION_MODE::MODE_WAIT_LOGOUT;
 						NowSession.OnAuth_ClientLeave(true);
 						InterlockedDecrement(&NumOfGamePlayer);
@@ -728,14 +768,13 @@ UINT CMMOServer::GameThread()
 					closesocket(UserNetworkInfo->AcceptedSock);
 					UserNetworkInfo->AcceptedSock = INVALID_SOCKET;
 
-					//NowSession.SessionInit();
 					NowSession.m_bAuthToGame = false;
-					NowSession.m_bLogOutFlag = false;
 					NowSession.m_byNowMode = CSession::en_SESSION_MODE::MODE_NONE;
 					NowSession.m_pUserNetworkInfo = NULL;
 					NowSession.m_Socket = INVALID_SOCKET;
 					NowSession.m_RecvIOData.RecvRingBuffer.InitPointer();
 
+					// 해당 UserNetworkInfo 를 재사용 할 수 있도록 스택에 넣음
 					m_SessionInfoStack.Push(UserNetworkInfo);
 
 					NowSession.OnGame_ClientRelease();
@@ -756,6 +795,7 @@ UINT CMMOServer::GameThread()
 char CMMOServer::RecvPost(CSession *pSession)
 {
 	CSession &RecvSession = *pSession;
+	// 링버퍼가 꽉 찼다면 정상적인 세션으로 간주하지 않음
 	if (RecvSession.m_RecvIOData.RecvRingBuffer.IsFull())
 	{
 		if (InterlockedDecrement(&RecvSession.m_uiIOCount) == 0)

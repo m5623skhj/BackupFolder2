@@ -2,13 +2,15 @@
 #include "MMOServer.h"
 #include "EchoPlayer.h"
 
+class CMMOMonitoringLanClient;
+
 class CEchoServer : public CMMOServer
 {
 public :
 	CEchoServer();
 	~CEchoServer();
 
-	bool EchoServerStart(const WCHAR *szMMOServerOptionFileName);
+	bool EchoServerStart(const WCHAR *szMMOServerOptionFileName, const WCHAR *szMonitoringClientFileName);
 	void EchoServerStop();
 
 	UINT GetNumOfUsingSerializeBuf();
@@ -28,5 +30,5 @@ private :
 
 	UINT							m_uiNumOfPlayer;
 	CEchoPlayer						*m_pEchoPlayerArray;
-
+	CMMOMonitoringLanClient			*m_pMonitoringClient;
 };

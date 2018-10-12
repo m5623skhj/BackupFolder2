@@ -5,6 +5,7 @@
 #include "Parse.h"
 #include "ServerCommon.h"
 #include "Log.h"
+#include "MMOMonitoringLanClient.h"
 
 CEchoServer::CEchoServer() : m_bIsServerRunning(false)
 {
@@ -29,10 +30,16 @@ CEchoServer::~CEchoServer()
 	}
 }
 
-bool CEchoServer::EchoServerStart(const WCHAR *szMMOServerOptionFileName)
+bool CEchoServer::EchoServerStart(const WCHAR *szMMOServerOptionFileName, const WCHAR *szMonitoringClientFileName)
 {
+	//m_pMonitoringClient = new CMMOMonitoringLanClient();
+
 	if (!Start(szMMOServerOptionFileName))
 		return false;
+
+	//m_pMonitoringClient->MonitoringLanClientStart(szMonitoringClientFileName, GetNumOfAllSession(),
+	//	GetNumOfAuthSession(), GetNumOfGameSession(), GetAuthFPSPtr(), GetGameFPSPtr(), GetNumOfWaitRoom(),
+	//	GetNumOfPlayRoom());
 
 	m_bIsServerRunning = true;
 

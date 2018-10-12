@@ -10,6 +10,8 @@
 // Post 함수가 에러 없이 처리되었음
 #define POST_RETVAL_COMPLETE				2
 
+#define dfNUM_OF_THREAD						4
+
 struct st_Error;
 
 class CNetServerSerializationBuf;
@@ -27,6 +29,14 @@ public :
 	UINT GetSendThreadFPSAndReset();
 	UINT GetAuthThreadFPSAndReset();
 	UINT GetGameThreadFPSAndReset();
+
+	UINT *GetAuthFPSPtr() { return &AuthThreadLoop; }
+	UINT *GetGameFPSPtr() { return &GameThreadLoop; }
+	UINT *GetNumOfAllSession() { return (UINT*)&NumOfTotalPlayer; }
+	UINT *GetNumOfAuthSession() { return &NumOfAuthPlayer; }
+	UINT *GetNumOfGameSession() { return &NumOfGamePlayer; }
+	UINT *GetNumOfWaitRoom() { return NULL; }
+	UINT *GetNumOfPlayRoom() { return NULL; }
 
 	int GetRecvCompleteQueueTotalNodeCount();
 
@@ -119,6 +129,14 @@ private :
 	static UINT __stdcall GameThreadStartAddress(LPVOID CMMOServerPointer);
 	UINT GameThread();
 
+	/////////////////////////////////////////////
+	// Release Thread
+	// 일정 주기마다 깨어나서
+	// SessionMode 가 로그아웃 대기중이면 그 세션을 초기화 함
+	/////////////////////////////////////////////
+	//static UINT __stdcall ReleaseThreadStartAddress(LPVOID CMMOServerPointer);
+	//UINT ReleaseThread();
+
 	char RecvPost(CSession *pSession);
 
 	bool OptionParsing(const WCHAR *szMMOServerOptionFileName);
@@ -151,6 +169,8 @@ private :
 	// 한 루프에 게임 스레드로 넘어오는 세션의 최대 개수
 	WORD												m_wNumOfGameProgress;
 
+	UINT												m_uiSendThreadLoopStartValue;
+
 	UINT												m_uiNumOfMaxClient;
 	UINT												m_uiNumOfUser;
 	SOCKET												m_ListenSock;
@@ -158,7 +178,7 @@ private :
 
 	HANDLE												*m_pWorkerThreadHandle;
 	HANDLE												m_hAcceptThread;
-	HANDLE												m_hSendThread;
+	HANDLE												m_hSendThread[2];
 	HANDLE												m_hAuthThread;
 	HANDLE												m_hGameThread;
 
