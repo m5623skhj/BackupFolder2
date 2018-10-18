@@ -10,7 +10,7 @@
 // Post 함수가 에러 없이 처리되었음
 #define POST_RETVAL_COMPLETE				2
 
-#define dfNUM_OF_THREAD						4
+#define dfNUM_OF_THREAD						5
 
 struct st_Error;
 
@@ -25,6 +25,14 @@ public :
 	UINT GetAcceptTPSAndReset();
 	UINT GetRecvTPSAndReset();
 	UINT GetSendTPSAndReset();
+	UINT GetNumOfUserInfoAlloc()
+	{
+		return m_pUserInfoMemoryPool->GetAllocChunkCount();
+	}
+	UINT GetUserInfoUse()
+	{
+		return m_pUserInfoMemoryPool->GetUseNodeCount();
+	}
 
 	UINT GetSendThreadFPSAndReset();
 	UINT GetAuthThreadFPSAndReset();
@@ -134,8 +142,8 @@ private :
 	// 일정 주기마다 깨어나서
 	// SessionMode 가 로그아웃 대기중이면 그 세션을 초기화 함
 	/////////////////////////////////////////////
-	//static UINT __stdcall ReleaseThreadStartAddress(LPVOID CMMOServerPointer);
-	//UINT ReleaseThread();
+	static UINT __stdcall ReleaseThreadStartAddress(LPVOID CMMOServerPointer);
+	UINT ReleaseThread();
 
 	char RecvPost(CSession *pSession);
 
@@ -148,6 +156,7 @@ private :
 		EVENT_SEND = 0,
 		EVENT_AUTH,
 		EVENT_GAME,
+		EVENT_RELEASE,
 		NUM_OF_EVENT
 	};
 
@@ -157,6 +166,7 @@ private :
 	WORD												m_wSendThreadSleepTime;
 	WORD												m_wAuthThreadSleepTime;
 	WORD												m_wGameThreadSleepTime;
+	WORD												m_wReleaseThreadSleepTime;
 	WORD												m_wLoopAuthHandlingPacket;
 	WORD												m_wLoopGameHandlingPacket;
 
@@ -181,6 +191,7 @@ private :
 	HANDLE												m_hSendThread[2];
 	HANDLE												m_hAuthThread;
 	HANDLE												m_hGameThread;
+	HANDLE												m_hReleaseThread;
 
 	HANDLE												m_hWorkerIOCP;
 
@@ -189,9 +200,12 @@ private :
 	HANDLE												m_hThreadExitEvent[en_EVENT_NUMBER::NUM_OF_EVENT];
 
 	// 세션 정보 스택
-	CLockFreeStack<CSession::AcceptUserInfo*>			m_SessionInfoStack;
+	//CLockFreeStack<CSession::AcceptUserInfo*>			m_SessionInfoStack;
+	CLockFreeStack<WORD>								m_SessionInfoStack;
 	// Accept 된 유저들의 세션 정보를 집어넣을 큐
 	CLockFreeQueue<CSession::AcceptUserInfo*>			m_AcceptUserInfoQueue;
+
+	CTLSMemoryPool<CSession::AcceptUserInfo>			*m_pUserInfoMemoryPool;
 	
 	// 세션 포인터 배열
 	// 외부 유저들의 포인터를 직접 배열에 넣어줘야함

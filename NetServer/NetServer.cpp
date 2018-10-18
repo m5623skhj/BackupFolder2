@@ -99,16 +99,16 @@ bool CNetServer::Start(const WCHAR *szOptionFileName)
 		return false;
 	}
 
-	int SendBufSize = 0;
-	retval = setsockopt(m_ListenSock, SOL_SOCKET, SO_SNDBUF, (char*)&SendBufSize, sizeof(SendBufSize));
-	if (retval == SOCKET_ERROR)
-	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
-		OnError(&Error);
-		return false;
-	}
+	//int SendBufSize = 0;
+	//retval = setsockopt(m_ListenSock, SOL_SOCKET, SO_SNDBUF, (char*)&SendBufSize, sizeof(SendBufSize));
+	//if (retval == SOCKET_ERROR)
+	//{
+	//	st_Error Error;
+	//	Error.GetLastErr = WSAGetLastError();
+	//	Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+	//	OnError(&Error);
+	//	return false;
+	//}
 
 	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, m_byNumOfUsingWorkerThread);
 	if (m_hWorkerIOCP == NULL)
@@ -272,6 +272,8 @@ UINT CNetServer::Accepter()
 	WCHAR IP[16];
 	int addrlen = sizeof(clientaddr);
 
+	CLockFreeStack<WORD> &SesseionIndexStack = *m_pSessionIndexStack;
+
 	while (1)
 	{
 		clientsock = accept(m_ListenSock, (SOCKADDR*)&clientaddr, &addrlen);
@@ -304,7 +306,7 @@ UINT CNetServer::Accepter()
 		UINT64 SessionID = InterlockedIncrement(&m_iIDCount);
 		// 가장 상위 2 바이트를 Session Stack 의 Index 로 사용함
 		WORD Index;
-		m_pSessionIndexStack->Pop(&Index);
+		SesseionIndexStack.Pop(&Index);
 		UINT64 SessionIdx = Index;
 		SessionID += (SessionIdx << SESSION_INDEX_SHIFT);
 
@@ -319,6 +321,7 @@ UINT CNetServer::Accepter()
 		AcceptSession.SendIOData.lBufferCount = 0;
 		AcceptSession.RecvIOData.IOMode = 0;
 		AcceptSession.SendIOData.IOMode = 0;
+		AcceptSession.NowPostQueuing = NONSENDING;
 
 		ZeroMemory(&AcceptSession.RecvIOData.Overlapped, sizeof(OVERLAPPED));
 		ZeroMemory(&AcceptSession.SendIOData.Overlapped, sizeof(OVERLAPPED));
@@ -326,7 +329,6 @@ UINT CNetServer::Accepter()
 		AcceptSession.RecvIOData.RingBuffer.InitPointer();
 		AcceptSession.IsUseSession = TRUE;
 				
-		DWORD flag = 0;
 		CreateIoCompletionPort((HANDLE)clientsock, m_hWorkerIOCP, (ULONG_PTR)&AcceptSession, 0);
 		InterlockedIncrement(&m_uiNumOfUser);
 
@@ -353,7 +355,6 @@ UINT CNetServer::Worker()
 	while (1)
 	{
 		cPostRetval = -1;
-		retval;
 		Transferred = 0;
 		pSession = NULL;
 		lpOverlapped = NULL;
@@ -362,108 +363,126 @@ UINT CNetServer::Worker()
 		OnWorkerThreadBegin();
 		if (lpOverlapped != NULL)
 		{
-			// 외부 종료코드에 의한 종료
-			if (pSession == NULL)
-			{
-				PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, (LPOVERLAPPED)1);
-				break;
-			}
 			// recv 파트
-			Session &IOCompleteSession = *pSession;
-			if (lpOverlapped == &IOCompleteSession.RecvIOData.Overlapped)
+			if (pSession != NULL)
 			{
-				// 클라이언트가 종료함
-				if (Transferred == 0)
+				Session &IOCompleteSession = *pSession;
+				if (lpOverlapped == &IOCompleteSession.RecvIOData.Overlapped)
 				{
-					// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-					if(InterlockedDecrement(&IOCompleteSession.IOCount) == 0)
-						ReleaseSession(&IOCompleteSession);
-
-					continue;
-				}
-
-				bool IsError = false;
-				IOCompleteSession.RecvIOData.RingBuffer.MoveWritePos(Transferred);
-				int RingBufferRestSize = IOCompleteSession.RecvIOData.RingBuffer.GetUseSize();
-
-				while (RingBufferRestSize > df_HEADER_SIZE)
-				{
-					CNetServerSerializationBuf &RecvSerializeBuf = *CNetServerSerializationBuf::Alloc();
-					IOCompleteSession.RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, df_HEADER_SIZE);
-					RecvSerializeBuf.m_iRead = 0;
-
-					BYTE Code;
-					WORD PayloadLength;
-					RecvSerializeBuf >> Code >> PayloadLength;
-
-					if (Code != CNetServerSerializationBuf::m_byHeaderCode)
+					// 클라이언트가 종료함
+					if (Transferred == 0)
 					{
-						cPostRetval = POST_RETVAL_ERR;
-						st_Error Err;
-						Err.GetLastErr = 0;
-						Err.ServerErr = HEADER_CODE_ERR;
-						InterlockedIncrement((UINT*)&checksum);
-						OnError(&Err);
-						IsError = true;
-						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-						break;
+						// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
+						if (InterlockedDecrement(&IOCompleteSession.IOCount) == 0)
+							ReleaseSession(&IOCompleteSession);
+
+						continue;
 					}
-					if (RingBufferRestSize < PayloadLength + df_HEADER_SIZE)
+
+					IOCompleteSession.RecvIOData.RingBuffer.MoveWritePos(Transferred);
+					int RingBufferRestSize = IOCompleteSession.RecvIOData.RingBuffer.GetUseSize();
+
+					while (RingBufferRestSize > df_HEADER_SIZE)
 					{
-						if (PayloadLength > dfDEFAULTSIZE)
+						CNetServerSerializationBuf &RecvSerializeBuf = *CNetServerSerializationBuf::Alloc();
+						IOCompleteSession.RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, df_HEADER_SIZE);
+						RecvSerializeBuf.m_iRead = 0;
+
+						BYTE Code;
+						WORD PayloadLength;
+						RecvSerializeBuf >> Code >> PayloadLength;
+
+						if (Code != CNetServerSerializationBuf::m_byHeaderCode)
 						{
 							cPostRetval = POST_RETVAL_ERR;
 							st_Error Err;
 							Err.GetLastErr = 0;
-							Err.ServerErr = PAYLOAD_SIZE_OVER_ERR;
-							InterlockedIncrement((UINT*)&payloadOver);
+							Err.ServerErr = HEADER_CODE_ERR;
+							InterlockedIncrement((UINT*)&checksum);
 							OnError(&Err);
-							IsError = true;
+							CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+							break;
 						}
-						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-						break;
-					}
-					IOCompleteSession.RecvIOData.RingBuffer.RemoveData(df_HEADER_SIZE);
+						if (RingBufferRestSize < PayloadLength + df_HEADER_SIZE)
+						{
+							if (PayloadLength > dfDEFAULTSIZE)
+							{
+								cPostRetval = POST_RETVAL_ERR;
+								st_Error Err;
+								Err.GetLastErr = 0;
+								Err.ServerErr = PAYLOAD_SIZE_OVER_ERR;
+								InterlockedIncrement((UINT*)&payloadOver);
+								OnError(&Err);
+							}
+							CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+							break;
+						}
+						IOCompleteSession.RecvIOData.RingBuffer.RemoveData(df_HEADER_SIZE);
 
-					retval = IOCompleteSession.RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
-					RecvSerializeBuf.m_iWrite += retval;
-					if (!RecvSerializeBuf.Decode())
-					{
-						cPostRetval = POST_RETVAL_ERR;
-						st_Error Err;
-						Err.GetLastErr = 0;
-						Err.ServerErr = CHECKSUM_ERR;
-						InterlockedIncrement((UINT*)&HeaderCode);
-						OnError(&Err);
-						IsError = true;
-						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-						break;
-					}
+						retval = IOCompleteSession.RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
+						RecvSerializeBuf.m_iWrite += retval;
+						if (!RecvSerializeBuf.Decode())
+						{
+							cPostRetval = POST_RETVAL_ERR;
+							st_Error Err;
+							Err.GetLastErr = 0;
+							Err.ServerErr = CHECKSUM_ERR;
+							InterlockedIncrement((UINT*)&HeaderCode);
+							OnError(&Err);
+							CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+							break;
+						}
 
-					RingBufferRestSize -= (retval + df_HEADER_SIZE);
-					OnRecv(IOCompleteSession.SessionID, &RecvSerializeBuf);
-					CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-				}
-				if (!IsError)
+						RingBufferRestSize -= (retval + df_HEADER_SIZE);
+						OnRecv(IOCompleteSession.SessionID, &RecvSerializeBuf);
+						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+					}
 					cPostRetval = RecvPost(&IOCompleteSession);
-			}
-			// send 파트
-			else if (lpOverlapped == &IOCompleteSession.SendIOData.Overlapped)
-			{
-				int BufferCount = IOCompleteSession.SendIOData.lBufferCount;
-				for (int i = 0; i < BufferCount; ++i)
-					CNetServerSerializationBuf::Free(IOCompleteSession.pSeirializeBufStore[i]);
-				
-				IOCompleteSession.SendIOData.lBufferCount -= BufferCount;
-
-				OnSend(pSession->SessionID, BufferCount);
-				if (!IOCompleteSession.bSendDisconnect)
-				{
-					InterlockedExchange(&IOCompleteSession.SendIOData.IOMode, NONSENDING);
-					cPostRetval = SendPost(&IOCompleteSession);
 				}
-				else
-					DisConnect(IOCompleteSession.SessionID);
+				// send 파트
+				else if (lpOverlapped == &IOCompleteSession.SendIOData.Overlapped)
+				{
+					// 클라이언트가 종료함
+					if (Transferred == 0)
+					{
+						// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
+						if (InterlockedDecrement(&IOCompleteSession.IOCount) == 0)
+							ReleaseSession(&IOCompleteSession);
+
+						continue;
+					}
+
+					int BufferCount = IOCompleteSession.SendIOData.lBufferCount;
+					for (int i = 0; i < BufferCount; ++i)
+						CNetServerSerializationBuf::Free(IOCompleteSession.pSeirializeBufStore[i]);
+
+					IOCompleteSession.SendIOData.lBufferCount -= BufferCount;
+
+					OnSend(pSession->SessionID, BufferCount);
+					if (!IOCompleteSession.bSendDisconnect)
+					{
+						InterlockedExchange(&IOCompleteSession.SendIOData.IOMode, NONSENDING);
+						cPostRetval = SendPost(&IOCompleteSession);
+						InterlockedExchange(&IOCompleteSession.NowPostQueuing, NONSENDING);
+					}
+					else
+					{
+						DisConnect(IOCompleteSession.SessionID);
+						cPostRetval = POST_RETVAL_COMPLETE;
+					}
+				}
+				// send 보내기 파트
+				else if ((UINT64)lpOverlapped == dfSEND_POST_QUEUING_OVERLAPPED)
+				{
+					cPostRetval = SendPost(&IOCompleteSession);
+					InterlockedExchange(&IOCompleteSession.NowPostQueuing, NONSENDING);
+				}
+			}
+			// 외부 종료코드에 의한 종료
+			else
+			{
+				PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, (LPOVERLAPPED)1);
+				break;
 			}
 		}
 		else
@@ -529,7 +548,7 @@ char CNetServer::RecvPost(Session *pSession)
 	
 	InterlockedIncrement(&RecvSession.IOCount);
 	ZeroMemory(&RecvSession.RecvIOData.Overlapped, sizeof(OVERLAPPED));
-	int retval = WSARecv(RecvSession.sock, wsaBuf, BufCount, NULL, &Flag, &RecvSession.RecvIOData.Overlapped, 0);
+	int retval = WSARecv(pSession->sock, wsaBuf, BufCount, NULL, &Flag, &pSession->RecvIOData.Overlapped, 0);
 	if (retval == SOCKET_ERROR)
 	{
 		int GetLastErr = WSAGetLastError();
@@ -578,9 +597,16 @@ bool CNetServer::SendPacket(UINT64 SessionID, CNetServerSerializationBuf *pSeria
 		pSerializeBuf->Encode();
 	}
 
-	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSerializeBuf);
+	Session &AcquireSession = m_pSessionArray[StackIndex];
+	AcquireSession.SendIOData.SendQ.Enqueue(pSerializeBuf);
 
-	SendPost(&m_pSessionArray[StackIndex]);
+	if (InterlockedExchange(&AcquireSession.NowPostQueuing, SENDING) == NONSENDING)
+	{
+		InterlockedIncrement(&AcquireSession.IOCount);
+		PostQueuedCompletionStatus(m_hWorkerIOCP, 1, (ULONG_PTR)&AcquireSession, (LPOVERLAPPED)dfSEND_POST_QUEUING_OVERLAPPED);
+	}
+
+	//SendPost(&AcquireSession);
 
 	SessionAcquireUnLock(StackIndex);
 	return true;
@@ -613,10 +639,19 @@ bool CNetServer::SendPacketAndDisConnect(UINT64 SessionID, CNetServerSerializati
 		pSendBuf->Encode();
 	}
 
-	m_pSessionArray[StackIndex].SendIOData.SendQ.Enqueue(pSendBuf);
+	Session &AcquireSession = m_pSessionArray[StackIndex];
 
-	m_pSessionArray[StackIndex].bSendDisconnect = TRUE;
-	SendPost(&m_pSessionArray[StackIndex]);
+	AcquireSession.SendIOData.SendQ.Enqueue(pSendBuf);
+
+	AcquireSession.bSendDisconnect = TRUE;
+
+	if (InterlockedExchange(&AcquireSession.NowPostQueuing, SENDING) == NONSENDING)
+	{
+		InterlockedIncrement(&AcquireSession.IOCount);
+		PostQueuedCompletionStatus(m_hWorkerIOCP, 1, (ULONG_PTR)&AcquireSession, (LPOVERLAPPED)dfSEND_POST_QUEUING_OVERLAPPED);
+	}
+
+	//SendPost(&AcquireSession);
 
 	SessionAcquireUnLock(StackIndex);
 	return true;
@@ -628,8 +663,9 @@ char CNetServer::SendPost(Session *pSession)
 	Session &SendSession = *pSession;
 	while (1)
 	{
-		if (InterlockedCompareExchange(&SendSession.SendIOData.IOMode, SENDING, NONSENDING))
-			return true;
+		if (InterlockedExchange(&SendSession.SendIOData.IOMode, SENDING) != NONSENDING)
+		//if (InterlockedCompareExchange(&SendSession.SendIOData.IOMode, SENDING, NONSENDING))
+			return POST_RETVAL_COMPLETE;
 
 		int UseSize = SendSession.SendIOData.SendQ.GetRestSize();
 		if (UseSize == 0)
@@ -639,16 +675,16 @@ char CNetServer::SendPost(Session *pSession)
 				continue;
 			return POST_RETVAL_COMPLETE;
 		}
-		else if (UseSize < 0)
-		{
-			if (InterlockedDecrement(&SendSession.IOCount) == 0)
-			{
-				ReleaseSession(&SendSession);
-				return POST_RETVAL_ERR_SESSION_DELETED;
-			}
-			InterlockedExchange(&SendSession.SendIOData.IOMode, NONSENDING);
-			return POST_RETVAL_ERR;
-		}
+		//else if (UseSize < 0)
+		//{
+		//	if (InterlockedDecrement(&SendSession.IOCount) == 0)
+		//	{
+		//		ReleaseSession(&SendSession);
+		//		return POST_RETVAL_ERR_SESSION_DELETED;
+		//	}
+		//	InterlockedExchange(&SendSession.SendIOData.IOMode, NONSENDING);
+		//	return POST_RETVAL_ERR;
+		//}
 
 		WSABUF wsaSendBuf[ONE_SEND_WSABUF_MAX];
 		if (ONE_SEND_WSABUF_MAX < UseSize)
@@ -660,7 +696,7 @@ char CNetServer::SendPost(Session *pSession)
 			wsaSendBuf[i].buf = SendSession.pSeirializeBufStore[i]->GetBufferPtr();
 			wsaSendBuf[i].len = SendSession.pSeirializeBufStore[i]->GetAllUseSize();
 		}
-		SendSession.SendIOData.lBufferCount += UseSize;
+		SendSession.SendIOData.lBufferCount = UseSize;
 	
 		InterlockedIncrement(&SendSession.IOCount);
 		ZeroMemory(&pSession->SendIOData.Overlapped, sizeof(OVERLAPPED));

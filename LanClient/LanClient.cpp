@@ -97,8 +97,9 @@ bool CLanClient::Start(const WCHAR *szOptionFileName)
 	}
 	m_byNumOfWorkerThread = m_byNumOfWorkerThread;
 
-	m_IOCount = 1;
+	//m_IOCount = 1;
 	m_wNumOfReconnect = 0;
+	m_SendIOData.IOMode = NONSENDING;
 	RecvPost();
 	OnConnectionComplete();
 
@@ -159,7 +160,6 @@ bool CLanClient::ReleaseSession()
 	//////////////////////////
 	g_Dump.Crash();
 	//////////////////////////
-
 
 	if (InterlockedCompareExchange64((LONG64*)&m_IOCount, 0, df_RELEASE_VALUE) != df_RELEASE_VALUE)
 		return false;
@@ -235,10 +235,10 @@ bool CLanClient::ReleaseSession()
 	RecvPost();
 
 	++m_wNumOfReconnect;
-	++m_IOCount;
+	//++m_IOCount;
 
-	if (InterlockedDecrement(&m_IOCount) == 0)
-		ReleaseSession();
+	//if (InterlockedDecrement(&m_IOCount) == 0)
+	//	ReleaseSession();
 	OnConnectionComplete();
 
 	return true;
@@ -267,7 +267,6 @@ UINT CLanClient::Worker()
 		// GQCS 에 완료 통지가 왔을 경우
 		if (lpOverlapped != NULL)
 		{
-
 			// 외부 종료코드에 의한 종료
 			if (pSession == NULL)
 			{
@@ -282,8 +281,7 @@ UINT CLanClient::Worker()
 				if (Transferred == 0)
 				{
 					// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-					m_IOCount = InterlockedDecrement(&m_IOCount);
-					if (m_IOCount == 0)
+					if (InterlockedDecrement(&m_IOCount) == 0)
 						ReleaseSession();
 
 					continue;
@@ -370,8 +368,7 @@ UINT CLanClient::Worker()
 
 		if (cPostRetval == POST_RETVAL_ERR_SESSION_DELETED)
 			continue;
-		m_IOCount = InterlockedDecrement(&m_IOCount);
-		if (m_IOCount == 0)
+		if (InterlockedDecrement(&m_IOCount) == 0)
 			ReleaseSession();
 	}
 
@@ -391,8 +388,7 @@ char CLanClient::RecvPost()
 	if (RecvIOData.RingBuffer.IsFull())
 	{
 		// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-		m_IOCount = InterlockedDecrement(&m_IOCount);
-		if (m_IOCount == 0)
+		if (InterlockedDecrement(&m_IOCount) == 0)
 		{
 			ReleaseSession();
 			return POST_RETVAL_ERR_SESSION_DELETED;
@@ -422,8 +418,7 @@ char CLanClient::RecvPost()
 		if (GetLastErr != ERROR_IO_PENDING)
 		{
 			// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-			m_IOCount = InterlockedDecrement(&m_IOCount);
-			if (m_IOCount == 0)
+			if (InterlockedDecrement(&m_IOCount) == 0)
 			{
 				ReleaseSession();
 				return POST_RETVAL_ERR_SESSION_DELETED;
@@ -484,7 +479,7 @@ char CLanClient::SendPost()
 	while (1)
 	{
 		if (InterlockedCompareExchange(&SendIOData.IOMode, SENDING, NONSENDING))
-			return true;
+			return POST_RETVAL_COMPLETE;
 
 		int UseSize = SendIOData.SendQ.GetRestSize();
 		if (UseSize == 0)
@@ -496,8 +491,7 @@ char CLanClient::SendPost()
 		}
 		else if (UseSize < 0)
 		{
-			m_IOCount = InterlockedDecrement(&m_IOCount);
-			if (m_IOCount == 0)
+			if (InterlockedDecrement(&m_IOCount) == 0)
 			{
 				ReleaseSession();
 				return POST_RETVAL_ERR_SESSION_DELETED;
@@ -525,16 +519,15 @@ char CLanClient::SendPost()
 			int err = WSAGetLastError();
 			if (err != ERROR_IO_PENDING)
 			{
-				//if (err == WSAENOBUFS)
-				//	dump.Crash();
+				if (err == WSAENOBUFS)
+					g_Dump.Crash();
 				st_Error Error;
 				Error.GetLastErr = err;
 				Error.ServerErr = SERVER_ERR::WSASEND_ERR;
 				OnError(&Error);
 
 				// 현재 m_IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-				m_IOCount = InterlockedDecrement(&m_IOCount);
-				if (m_IOCount == 0)
+				if (InterlockedDecrement(&m_IOCount) == 0)
 				{
 					ReleaseSession();
 					return POST_RETVAL_ERR_SESSION_DELETED;
