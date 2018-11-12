@@ -25,7 +25,7 @@ bool CChatServer::ChattingServerStart(const WCHAR *szChatServerOptionFileName, c
 	m_pMessageMemoryPool = new CTLSMemoryPool<st_MESSAGE>(30, false);
 	m_pMessageQueue = new CLockFreeQueue<st_MESSAGE*>;
 	m_pChattingLanClient = new CChattingLanClient();
-	//m_pMonitoringLanClient = new CChatMonitoringLanClient();
+	m_pMonitoringLanClient = new CChatMonitoringLanClient();
 
 	SetLogLevel(LOG_LEVEL::LOG_DEBUG);
 
@@ -37,22 +37,29 @@ bool CChatServer::ChattingServerStart(const WCHAR *szChatServerOptionFileName, c
 
 	if (!Start(szChatServerOptionFileName))
 		return false;
+	wprintf(L"NetServer Start\n");
 	if (!m_pChattingLanClient->ChattingLanClientStart(this, szChatServerLanClientFileName, m_pSessionKeyMemoryPool, (UINT64)&m_UserSessionKeyMap))
 		return false;
-	//if(!m_pMonitoringLanClient->MonitoringLanClientStart(szMonitoringClientFileName, &m_uiNumOfSessionAll, &m_uiNumOfLoginCompleteUser))
-	//	return false;
+	wprintf(L"LanClient Start\n");
+	if (!m_pMonitoringLanClient->MonitoringLanClientStart(szMonitoringClientFileName, &m_uiNumOfSessionAll, &m_uiNumOfLoginCompleteUser))
+		return false;
+	wprintf(L"Monitoring Client Connect\n");
 
 	m_hUpdateThreadHandle = (HANDLE)_beginthreadex(NULL, 0, UpdateThread, this, 0, NULL);
 	m_hSessionKeyHeartBeatThreadHandle = (HANDLE)_beginthreadex(NULL, 0, SessionKeyHeartbeatCheckThread, this, 0, NULL);
 
 	m_pSessionKeyMapCS = m_pChattingLanClient->GetSessionKeyMapCS();
 
+	wprintf(L"Chatting Server Start\n");
 	return true;
 }
 
 void CChatServer::ChattingServerStop()
 {
 	Stop();
+	m_pChattingLanClient->ChattingLanClientStop();
+	m_pMonitoringLanClient->MonitoringLanClientStop();
+
 	SetEvent(m_hExitEvent);
 	// HeartBeat
 	// WaitForMultipleObject(~~~);
@@ -178,8 +185,9 @@ void CChatServer::OnError(st_Error *OutError)
 {
 	if (OutError->GetLastErr != 10054)
 	{
-		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
-		printf_s("==============================================================\n");
+		//g_Dump.Crash();
+		_LOG(LOG_LEVEL::LOG_DEBUG, L"CHATSERVERERR ", L"%d\n%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
+		//printf_s("==============================================================\n");
 	}
 }
 

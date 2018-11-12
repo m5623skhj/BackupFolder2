@@ -339,8 +339,8 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 	CNetServerSerializationBuf &SendBuf = *pOutSendPacket;
 	WORD Type = en_PACKET_CS_CHAT_RES_LOGIN;
 	
-	auto &User = *m_UserSessionMap.find(SessionID)->second;
-	if (&User != m_UserSessionMap.end()->second)
+	auto UserIter = m_UserSessionMap.find(SessionID);
+	if (UserIter != m_UserSessionMap.end())
 		Status = TRUE;
 	else
 	{
@@ -351,11 +351,16 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 		err.ServerErr = NOT_IN_USER_MAP_ERR;
 		OnError(&err);
 
-		SendPacket(SessionID, &SendBuf);
+		CNetServerSerializationBuf::AddRefCount(&SendBuf);
+		SendPacketAndDisConnect(SessionID, &SendBuf);
 
-		DisConnect(SessionID);
+		//SendPacket(SessionID, &SendBuf);
+
+		//DisConnect(SessionID);
 		return false;
 	}
+
+	st_USER &User = *UserIter->second;
 
 	User.uiAccountNO = AccountNo;
 	RecvPacket.ReadBuffer((char*)&User.szID, sizeof(WCHAR) * dfID_NICKNAME_LENGTH);
@@ -364,7 +369,29 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 	// SessionKeyMap 임계영역 시작
 	EnterCriticalSection(m_pSessionKeyMapCS);
 
-	st_SessionKey *pSessionKey = m_UserSessionKeyMap.find(AccountNo)->second;
+	auto SessionKeyIter = m_UserSessionKeyMap.find(AccountNo);
+	if (SessionKeyIter == m_UserSessionKeyMap.end())
+	{
+		Status = FALSE;
+		SendBuf << Type << Status << AccountNo;
+		st_Error err;
+		err.Line = __LINE__;
+		err.ServerErr = SESSION_KEY_IS_NULL;
+		OnError(&err);
+
+		CNetServerSerializationBuf::AddRefCount(&SendBuf);
+		SendPacketAndDisConnect(SessionID, &SendBuf);
+
+		// SessionKeyMap 임계영역 끝
+		LeaveCriticalSection(m_pSessionKeyMapCS);
+
+		//SendPacket(SessionID, &SendBuf);
+
+		//DisConnect(SessionID);
+		return false;
+	}
+
+	st_SessionKey *pSessionKey = SessionKeyIter->second;
 	if (memcmp(pSessionKey, User.SessionKey, dfSESSIONKEY_SIZE) != 0)
 		//if (pSessionKey == m_UserSessionKeyMap.end()->second)
 	{
@@ -375,8 +402,16 @@ bool CChatServer::PacketProc_Login(CNetServerSerializationBuf *pRecvPacket, CNet
 		err.Line = __LINE__;
 		err.ServerErr = INCORRECT_SESSION_KEY_ERR;
 		OnError(&err);
-		SendPacket(SessionID, &SendBuf);
-		DisConnect(SessionID);
+		
+		CNetServerSerializationBuf::AddRefCount(&SendBuf);
+		SendPacketAndDisConnect(SessionID, &SendBuf);
+		
+		// SessionKeyMap 임계영역 끝
+		LeaveCriticalSection(m_pSessionKeyMapCS);
+
+		//SendPacket(SessionID, &SendBuf);
+
+		//DisConnect(SessionID);
 		return false;
 	}
 

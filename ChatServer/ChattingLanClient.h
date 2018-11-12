@@ -13,7 +13,7 @@ public:
 	virtual ~CChattingLanClient();
 
 	bool ChattingLanClientStart(CChatServer* pChattingServer, const WCHAR *szOptionFileName, CTLSMemoryPool<st_SessionKey> *pSessionKeyMemoryPool, UINT64 SessionKeyMapAddr);
-	void Stop();
+	void ChattingLanClientStop();
 
 	CRITICAL_SECTION* GetSessionKeyMapCS() { return &m_SessionKeyMapCS; }
 

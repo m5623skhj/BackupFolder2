@@ -1,83 +1,91 @@
 #include "PreCompile.h"
-#include "ChatMonitoringLanClient.h"
+
+#include "MatchmakingMonitoringClient.h"
 #include "LanServerSerializeBuf.h"
 #include "NetServerSerializeBuffer.h"
 #include "Log.h"
-#include "MonitorProtocol.h"
+#include "Protocol/CommonProtocol.h"
 
-CChatMonitoringLanClient::CChatMonitoringLanClient()
+CMatchmakingMonitoringClient::CMatchmakingMonitoringClient()
 {
+	// 모니터링을 위한 pdh 정보 얻기
 	PdhOpenQuery(NULL, NULL, &m_PdhQuery);
 
-	PdhAddCounter(m_PdhQuery, L"\\Process(NetServer)\\Private Bytes", NULL, &m_WorkingSet);
+	PdhAddCounter(m_PdhQuery, L"\\Process(MatchmakingServer)\\Private Bytes", NULL, &m_PrivateBytes);
 
-	// 매치 메이킹 이전용 임시 쿼리 등록
 	PdhAddCounter(m_PdhQuery, L"\\Processor(_Total)\\% Processor Time", NULL, &m_ProcessorUsage);
 	PdhAddCounter(m_PdhQuery, L"\\Memory\\Available MBytes", NULL, &m_AvailableMemory);
 	PdhAddCounter(m_PdhQuery, L"\\Network Interface(*)\\Bytes Received/sec", NULL, &m_NetworkRecv);
 	PdhAddCounter(m_PdhQuery, L"\\Network Interface(*)\\Bytes Sent/sec", NULL, &m_NetworkSend);
 	PdhAddCounter(m_PdhQuery, L"\\Memory\\Pool Nonpaged Bytes", NULL, &m_NonPagedMemory);
+}
+
+CMatchmakingMonitoringClient::~CMatchmakingMonitoringClient()
+{
 
 }
 
-CChatMonitoringLanClient::~CChatMonitoringLanClient()
+bool CMatchmakingMonitoringClient::MatchmakingMonitoringClientStart(const WCHAR *szMatchmakingMonitoringClientOptionFile, UINT *SessionAll, UINT *LoginPlayer)
 {
-}
+	if(!Start(szMatchmakingMonitoringClientOptionFile))
+		return false;
 
-bool CChatMonitoringLanClient::MonitoringLanClientStart(const WCHAR *szOptionFileName, UINT *pNumOfSessionAll, UINT *pNumOfLoginCompleteUser)
-{
-	Start(szOptionFileName);
+	m_pNumOfSessionAll = SessionAll;
+	m_pNumOfLoginCompleteUser = LoginPlayer;
 
-	m_pNumOfSessionAll = pNumOfSessionAll;
-	m_pNumOfLoginCompleteUser = pNumOfLoginCompleteUser;
+	m_hMonitoringThreadHandle = (HANDLE)_beginthreadex(NULL, 0, MonitoringInfoSendThread, this, 0, NULL);
+	m_hMonitoringThreadExitHandle = CreateEvent(NULL, TRUE, FALSE, NULL);
 
 	return true;
 }
 
-void CChatMonitoringLanClient::MonitoringLanClientStop()
+void CMatchmakingMonitoringClient::MatchmakingMonitoringClientStop()
 {
-	SetEvent(m_hMonitoringThreadHandle);
 	Stop();
+	SetEvent(m_hMonitoringThreadExitHandle);
+
+	WaitForSingleObject(m_hMonitoringThreadHandle, INFINITE);
+
+	CloseHandle(m_hMonitoringThreadExitHandle);
+	CloseHandle(m_hMonitoringThreadHandle);
 }
 
-void CChatMonitoringLanClient::OnConnectionComplete()
+void CMatchmakingMonitoringClient::OnConnectionComplete()
 {
-	CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
+	// 모니터링 서버에 접속을 성공하였다면
+	// 모니터링 서버에게 ServerNo 를 보내줌
+	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
 	WORD Type = en_PACKET_SS_MONITOR_LOGIN;
-	int ServerType = dfMONITOR_SERVER_TYPE_CHAT;
 
-	*SendBuf << Type << ServerType;
+	SendBuf << Type << m_iServerNo;
 
-	CSerializationBuf::AddRefCount(SendBuf);
-	SendPacket(SendBuf);
-	CSerializationBuf::Free(SendBuf);
+	SendPacket(&SendBuf);
 
 	m_hMonitoringThreadHandle = (HANDLE)_beginthreadex(NULL, 0, MonitoringInfoSendThread, this, 0, 0);
 }
 
-void CChatMonitoringLanClient::OnRecv(CSerializationBuf *OutReadBuf)
+void CMatchmakingMonitoringClient::OnRecv(CSerializationBuf *OutReadBuf)
 {
 
 }
 
-void CChatMonitoringLanClient::OnSend()
+void CMatchmakingMonitoringClient::OnSend()
 {
 
 }
 
-void CChatMonitoringLanClient::OnWorkerThreadBegin()
+void CMatchmakingMonitoringClient::OnWorkerThreadBegin()
 {
 
 }
 
-void CChatMonitoringLanClient::OnWorkerThreadEnd()
+void CMatchmakingMonitoringClient::OnWorkerThreadEnd()
 {
 
 }
 
-void CChatMonitoringLanClient::OnError(st_Error *OutError)
+void CMatchmakingMonitoringClient::OnError(st_Error *OutError)
 {
-	//g_Dump.Crash();
 	if (OutError->GetLastErr != 10054)
 	{
 		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
@@ -85,52 +93,52 @@ void CChatMonitoringLanClient::OnError(st_Error *OutError)
 	}
 }
 
-UINT __stdcall CChatMonitoringLanClient::MonitoringInfoSendThread(LPVOID MonitoringClient)
+UINT __stdcall CMatchmakingMonitoringClient::MonitoringInfoSendThread(LPVOID MonitoringClient)
 {
-	return ((CChatMonitoringLanClient*)MonitoringClient)->MonitoringInfoSender();
+	return ((CMatchmakingMonitoringClient*)MonitoringClient)->MonitoringInfoSender();
 }
 
-UINT __stdcall CChatMonitoringLanClient::MonitoringInfoSender()
+UINT CMatchmakingMonitoringClient::MonitoringInfoSender()
 {
 	int TimeStamp;
-	
+
 	while (1)
 	{
-		if (WaitForSingleObject(m_hMonitoringThreadHandle, 1000) == WAIT_TIMEOUT)
+		// 1 초 마다 일어나서 모니터링 서버에게 현재 모니터링 한 정보들을 보내줌
+		if (WaitForSingleObject(m_hMonitoringThreadExitHandle, 1000) == WAIT_TIMEOUT)
 		{
 			TimeStamp = (int)time(NULL);
 			PdhCollectQueryData(m_PdhQuery);
 
-			SendChatServerOn(TimeStamp);
-			SendChatCPU(TimeStamp);
-			SendChatMemoryCommit(TimeStamp);
-			SendChatPacketPool(TimeStamp);
-			SendChatSession(TimeStamp);
-			SendChatPlayer(TimeStamp);
-			//SendChatRoom(TimeStamp);
+			SendMatchmakingServerOn(TimeStamp);
+			SendMatchmakingCPU(TimeStamp);
+			SendMatchmakingMemoryCommit(TimeStamp);
+			SendMatchmakingPacketPool(TimeStamp);
+			SendMatchmakingSessionAll(TimeStamp);
+			SendMatchmakingLoginPlayer(TimeStamp);
+			SendMatchmakingEnterRoomSuccessTPS(TimeStamp);
 
-			// 매치 메이킹 이전용
-			SendServerCPUTotal(TimeStamp);
-			SendServerAvailableMemroy(TimeStamp);
-			SendServerNetworkRecv(TimeStamp);
-			SendServerNetworkSend(TimeStamp);
-			SendServerNonpagedMemory(TimeStamp);
+			SendCPUTotal(TimeStamp);
+			SendAvailableMemroy(TimeStamp);
+			SendNetworkRecv(TimeStamp);
+			SendNetworkSend(TimeStamp);
+			SendNonpagedMemory(TimeStamp);
 		}
+		// 외부에서 스레드를 정지시킴
 		else
 			break;
 	}
 
-	CloseHandle(m_hMonitoringThreadHandle);
 	return 0;
 }
 
-void CChatMonitoringLanClient::SendChatServerOn(int TimeStamp)
+void CMatchmakingMonitoringClient::SendMatchmakingServerOn(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
 	int DataValue;
 
-	DataType = dfMONITOR_DATA_TYPE_CHAT_SERVER_ON;
+	DataType = dfMONITOR_DATA_TYPE_MATCH_SERVER_ON;
 	DataValue = 1;
 
 	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
@@ -141,14 +149,14 @@ void CChatMonitoringLanClient::SendChatServerOn(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendChatCPU(int TimeStamp)
+void CMatchmakingMonitoringClient::SendMatchmakingCPU(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
 	int DataValue;
 
 	m_CPUObserver.UpdateCPUTime();
-	DataType = dfMONITOR_DATA_TYPE_CHAT_CPU;
+	DataType = dfMONITOR_DATA_TYPE_MATCH_CPU;
 	DataValue = (int)m_CPUObserver.ProcessTotal();
 
 	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
@@ -159,15 +167,15 @@ void CChatMonitoringLanClient::SendChatCPU(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendChatMemoryCommit(int TimeStamp)
+void CMatchmakingMonitoringClient::SendMatchmakingMemoryCommit(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
 	int DataValue;
 
 	PDH_FMT_COUNTERVALUE CounterValue;
-	PDH_STATUS Status = PdhGetFormattedCounterValue(m_WorkingSet, PDH_FMT_LONG, NULL, &CounterValue);
-	DataType = dfMONITOR_DATA_TYPE_CHAT_MEMORY_COMMIT;
+	PDH_STATUS Status = PdhGetFormattedCounterValue(m_PrivateBytes, PDH_FMT_LONG, NULL, &CounterValue);
+	DataType = dfMONITOR_DATA_TYPE_MATCH_MEMORY_COMMIT;
 	DataValue = (int)(CounterValue.longValue / dfDIVIDE_MEGABYTE);
 
 	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
@@ -178,14 +186,14 @@ void CChatMonitoringLanClient::SendChatMemoryCommit(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendChatPacketPool(int TimeStamp)
+void CMatchmakingMonitoringClient::SendMatchmakingPacketPool(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
 	int DataValue;
 
 	UINT NumOfUsePacket = CSerializationBuf::GetUsingSerializeBufNodeCount() + CNetServerSerializationBuf::GetUsingSerializeBufNodeCount();
-	DataType = dfMONITOR_DATA_TYPE_CHAT_PACKET_POOL;
+	DataType = dfMONITOR_DATA_TYPE_MATCH_PACKET_POOL;
 	DataValue = NumOfUsePacket;
 
 	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
@@ -196,13 +204,13 @@ void CChatMonitoringLanClient::SendChatPacketPool(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendChatSession(int TimeStamp)
+void CMatchmakingMonitoringClient::SendMatchmakingSessionAll(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
 	int DataValue;
 
-	DataType = dfMONITOR_DATA_TYPE_CHAT_SESSION;
+	DataType = dfMONITOR_DATA_TYPE_MATCH_SESSION;
 	DataValue = (int)*m_pNumOfSessionAll;
 
 	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
@@ -213,13 +221,13 @@ void CChatMonitoringLanClient::SendChatSession(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendChatPlayer(int TimeStamp)
+void CMatchmakingMonitoringClient::SendMatchmakingLoginPlayer(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
 	int DataValue;
 
-	DataType = dfMONITOR_DATA_TYPE_CHAT_PLAYER;
+	DataType = dfMONITOR_DATA_TYPE_MATCH_PLAYER;
 	DataValue = (int)*m_pNumOfLoginCompleteUser;
 
 	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
@@ -230,12 +238,24 @@ void CChatMonitoringLanClient::SendChatPlayer(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendChatRoom(int TimeStamp)
+void CMatchmakingMonitoringClient::SendMatchmakingEnterRoomSuccessTPS(int TimeStamp)
 {
+	BYTE DataType;
+	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
+	int DataValue;
 
+	DataType = dfMONITOR_DATA_TYPE_MATCH_PLAYER;
+	DataValue = (int)*m_pNumOfLoginCompleteUser;
+
+	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
+	SendBuf << Type << DataType << DataValue << TimeStamp;
+
+	CSerializationBuf::AddRefCount(&SendBuf);
+	SendPacket(&SendBuf);
+	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendServerCPUTotal(int TimeStamp)
+void CMatchmakingMonitoringClient::SendCPUTotal(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
@@ -254,7 +274,7 @@ void CChatMonitoringLanClient::SendServerCPUTotal(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendServerAvailableMemroy(int TimeStamp)
+void CMatchmakingMonitoringClient::SendAvailableMemroy(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
@@ -273,7 +293,7 @@ void CChatMonitoringLanClient::SendServerAvailableMemroy(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendServerNetworkRecv(int TimeStamp)
+void CMatchmakingMonitoringClient::SendNetworkRecv(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
@@ -292,7 +312,7 @@ void CChatMonitoringLanClient::SendServerNetworkRecv(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendServerNetworkSend(int TimeStamp)
+void CMatchmakingMonitoringClient::SendNetworkSend(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
@@ -311,7 +331,7 @@ void CChatMonitoringLanClient::SendServerNetworkSend(int TimeStamp)
 	CSerializationBuf::Free(&SendBuf);
 }
 
-void CChatMonitoringLanClient::SendServerNonpagedMemory(int TimeStamp)
+void CMatchmakingMonitoringClient::SendNonpagedMemory(int TimeStamp)
 {
 	BYTE DataType;
 	WORD Type = en_PACKET_SS_MONITOR_DATA_UPDATE;
@@ -328,4 +348,31 @@ void CChatMonitoringLanClient::SendServerNonpagedMemory(int TimeStamp)
 	CSerializationBuf::AddRefCount(&SendBuf);
 	SendPacket(&SendBuf);
 	CSerializationBuf::Free(&SendBuf);
+}
+
+bool CMatchmakingMonitoringClient::MatchmakingMonitoringClientOptionParsing(const WCHAR *szOptionFileName)
+{
+	_wsetlocale(LC_ALL, L"Korean");
+
+	CParser parser;
+	WCHAR cBuffer[BUFFER_MAX];
+
+	FILE *fp;
+	_wfopen_s(&fp, szOptionFileName, L"rt, ccs=UNICODE");
+
+	int iJumpBOM = ftell(fp);
+	fseek(fp, 0, SEEK_END);
+	int iFileSize = ftell(fp);
+	fseek(fp, iJumpBOM, SEEK_SET);
+	int FileSize = (int)fread_s(cBuffer, BUFFER_MAX, sizeof(WCHAR), BUFFER_MAX / 2, fp);
+	int iAmend = iFileSize - FileSize; // 개행 문자와 파일 사이즈에 대한 보정값
+	fclose(fp);
+
+	cBuffer[iFileSize - iAmend] = '\0';
+	WCHAR *pBuff = cBuffer;
+
+	if (!parser.GetValue_Int(pBuff, L"MONITORING", L"SERVER_NO", &m_iServerNo))
+		return false;
+
+	return true;
 }

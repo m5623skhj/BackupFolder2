@@ -1,9 +1,9 @@
 #include "PreCompile.h"
 #include "ChattingLanClient.h"
 #include "LanServerSerializeBuf.h"
-#include "CommonProtocol.h"
 #include "ChatServer.h"
 #include "Log.h"
+#include "CommonProtocol.h"
 
 CChattingLanClient::CChattingLanClient()
 {
@@ -26,26 +26,25 @@ bool CChattingLanClient::ChattingLanClientStart(CChatServer* pChattingServer, co
 	return true;
 }
 
-void CChattingLanClient::Stop()
+void CChattingLanClient::ChattingLanClientStop()
 {
+	Stop();
 	DeleteCriticalSection(&m_SessionKeyMapCS);
-
 }
 
 void CChattingLanClient::OnConnectionComplete()
 {
-	CSerializationBuf &SendBuf = *CSerializationBuf::Alloc();
+	CSerializationBuf *SendBuf = CSerializationBuf::Alloc();
 	WORD Type = en_PACKET_SS_LOGINSERVER_LOGIN;
 	BYTE ServerType = dfSERVER_TYPE_CHAT;
 	WCHAR ServerName[32] = L"ChattingServer";
 
-	SendBuf << Type << ServerType;
-	SendBuf.WriteBuffer((char*)ServerName, dfSERVER_NAME_SIZE);
+	*SendBuf << Type << ServerType;
+	SendBuf->WriteBuffer((char*)ServerName, dfSERVER_NAME_SIZE);
 
-	CSerializationBuf::AddRefCount(&SendBuf);
-	SendPacket(&SendBuf);
-
-	CSerializationBuf::Free(&SendBuf);
+	CSerializationBuf::AddRefCount(SendBuf);
+	SendPacket(SendBuf);
+	CSerializationBuf::Free(SendBuf);
 }
 
 void CChattingLanClient::OnRecv(CSerializationBuf *OutReadBuf)
@@ -92,7 +91,6 @@ void CChattingLanClient::OnRecv(CSerializationBuf *OutReadBuf)
 
 		CSerializationBuf::AddRefCount(&SendBuf);
 		SendPacket(&SendBuf);
-
 		CSerializationBuf::Free(&SendBuf);
 	}
 	else
@@ -120,7 +118,7 @@ void CChattingLanClient::OnError(st_Error *OutError)
 {
 	if (OutError->GetLastErr != 10054)
 	{
-		_LOG(LOG_LEVEL::LOG_DEBUG, L"ERR ", L"%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
+		_LOG(LOG_LEVEL::LOG_DEBUG, L"LANCLIENT_ERR ", L"%d\n%d\n", OutError->GetLastErr, OutError->ServerErr, OutError->Line);
 		printf_s("==============================================================\n");
 	}
 }
