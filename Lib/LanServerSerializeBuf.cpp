@@ -2,7 +2,7 @@
 #include "LanServerSerializeBuf.h"
 #include "LockFreeMemoryPool.h"
 
-CTLSMemoryPool<CSerializationBuf>* CSerializationBuf::pMemoryPool = new CTLSMemoryPool<CSerializationBuf>(NUM_OF_CHUNK, false);
+CTLSMemoryPool<CSerializationBuf>* CSerializationBuf::pMemoryPool = new CTLSMemoryPool<CSerializationBuf>(NUM_OF_LANBUF_CHUNK, false);
 
 struct st_Exception
 {
@@ -266,6 +266,22 @@ void CSerializationBuf::ChunkFreeForcibly()
 {
 	CSerializationBuf::pMemoryPool->ChunkFreeForcibly();
 }
+
+int CSerializationBuf::GetUsingSerializeBufNodeCount()
+{
+	return CSerializationBuf::pMemoryPool->GetUseNodeCount();
+}
+
+int CSerializationBuf::GetUsingSerializeBufChunkCount()
+{
+	return CSerializationBuf::pMemoryPool->GetUseChunkCount();
+}
+
+int CSerializationBuf::GetAllocSerializeBufChunkCount()
+{
+	return CSerializationBuf::pMemoryPool->GetAllocChunkCount();
+}
+
 
 //////////////////////////////////////////////////////////////////
 // Operator <<

@@ -3,7 +3,7 @@
 #include "LockFreeMemoryPool.h"
 #include <Windows.h>
 
-#define dfDEFAULTSIZE		1024
+#define dfDEFAULTSIZE		512
 #define BUFFFER_MAX			10000
 
 // Header 의 크기를 결정함
@@ -13,7 +13,7 @@
 // 혹은 GetLastWrite() 를 사용하여 사용자가 쓴 마지막 값을 사이즈로 넘겨줌
 #define HEADER_SIZE			2
 
-#define NUM_OF_CHUNK		5
+#define NUM_OF_LANBUF_CHUNK		5
 
 class CLanServer;
 class CLanClient;
@@ -24,13 +24,13 @@ private:
 	BYTE		m_byDelCnt = 0;
 
 	BYTE		m_byError;
-	BOOL		m_bHeaderInputted;
-	int			m_iWrite;
-	int			m_iRead;
-	int			m_iSize;
+	bool		m_bHeaderInputted;
+	WORD		m_iWrite;
+	WORD		m_iRead;
+	WORD		m_iSize;
 	// WritePtrSetHeader 함수로 부터 마지막에 쓴 공간을 기억함
-	int			m_iWriteLast;
-	int			m_iUserWriteBefore;
+	WORD		m_iWriteLast;
+	WORD		m_iUserWriteBefore;
 	UINT		m_iRefCount;
 	char		*m_pSerializeBuffer;
 	//static CLockFreeMemoryPool<CSerializationBuf>	*pMemoryPool;
@@ -53,7 +53,6 @@ private:
 	int GetLastWrite();
 
 	char *GetBufferPtr();
-	char *GetReadBufferPtr();
 	char *GetWriteBufferPtr();
 
 	void PeekBuffer(char *pDest, int Size);
@@ -83,6 +82,7 @@ public:
 	// 쓰기 포인터를 가장 처음으로 이동시킴
 	void MoveWritePosBeforeCallThisPos();
 
+	char *GetReadBufferPtr();
 	void WriteBuffer(char *pData, int Size);
 	void ReadBuffer(char *pDest, int Size);
 
@@ -99,7 +99,9 @@ public:
 	static CSerializationBuf* Alloc();
 	static void				  AddRefCount(CSerializationBuf* AddRefBuf);
 	static void				  Free(CSerializationBuf* DeleteBuf);
-
+	static int				  GetUsingSerializeBufNodeCount();
+	static int				  GetUsingSerializeBufChunkCount();
+	static int				  GetAllocSerializeBufChunkCount();
 
 	CSerializationBuf& operator<<(int Input);
 	CSerializationBuf& operator<<(WORD Input);

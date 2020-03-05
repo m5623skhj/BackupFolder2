@@ -20,9 +20,10 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 {
 	if (!NetServerOptionParsing(szOptionFileName))
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::PARSING_ERR;
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::PARSING_ERR;
+		WriteError(WSAGetLastError(), SERVER_ERR::PARSING_ERR);
 		return false;
 	}
 
@@ -30,20 +31,22 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 	WSADATA Wsa;
 	if (WSAStartup(MAKEWORD(2, 2), &Wsa))
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::WSASTARTUP_ERR;
-		OnError(&Error);
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::WSASTARTUP_ERR;
+		//OnError(&Error);
+		WriteError(WSAGetLastError(), SERVER_ERR::WSASTARTUP_ERR);
 		return false;
 	}
 
 	m_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (m_sock == INVALID_SOCKET)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::LISTEN_SOCKET_ERR;
-		OnError(&Error);
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::LISTEN_SOCKET_ERR;
+		//OnError(&Error);
+		WriteError(WSAGetLastError(), SERVER_ERR::LISTEN_SOCKET_ERR);
 		return false;
 	}
 
@@ -72,9 +75,10 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 	retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&m_bIsNagleOn, sizeof(int));
 	if (retval == SOCKET_ERROR)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		WriteError(WSAGetLastError(), SERVER_ERR::SETSOCKOPT_ERR);
 		return false;
 	}
 
@@ -82,19 +86,21 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 	retval = setsockopt(m_sock, SOL_SOCKET, SO_SNDBUF, (char*)&SendBufSize, sizeof(SendBufSize));
 	if (retval == SOCKET_ERROR)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
-		OnError(&Error);
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		//OnError(&Error);
+		WriteError(WSAGetLastError(), SERVER_ERR::SETSOCKOPT_ERR);
 		return false;
 	}
 
 	m_hWorkerIOCP = CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, m_byNumOfUsingWorkerThread);
 	if (m_hWorkerIOCP == NULL)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::WORKERIOCP_NULL_ERR;
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::WORKERIOCP_NULL_ERR;
+		WriteError(WSAGetLastError(), SERVER_ERR::WORKERIOCP_NULL_ERR);
 		return false;
 	}
 	CreateIoCompletionPort((HANDLE)m_sock, m_hWorkerIOCP, (ULONG_PTR)&m_sock, 0);
@@ -106,6 +112,8 @@ bool CNetClient::Start(const WCHAR *szOptionFileName)
 
 	m_IOCount = 1;
 	m_wNumOfReconnect = 0;
+	m_SendIOData.lBufferCount = 0;
+	m_SendIOData.IOMode = NONSENDING;
 	RecvPost();
 
 	if (InterlockedDecrement(&m_IOCount) == 0)
@@ -150,7 +158,7 @@ bool CNetClient::NetServerOptionParsing(const WCHAR *szOptionFileName)
 	cBuffer[iFileSize - iAmend] = '\0';
 	WCHAR *pBuff = cBuffer;
 
-	BYTE HeaderCode, XORCode1, XORCode2, DebugLevel;
+	BYTE HeaderCode, XORCode, DebugLevel;
 
 	if (!parser.GetValue_String(pBuff, L"NETCLIENT", L"SERVER_IP", m_IP))
 		return false;
@@ -162,18 +170,19 @@ bool CNetClient::NetServerOptionParsing(const WCHAR *szOptionFileName)
 		return false;
 	if (!parser.GetValue_Byte(pBuff, L"NETCLIENT", L"NAGLE_ON", (BYTE*)&m_bIsNagleOn))
 		return false;
-
+	if (!parser.GetValue_Byte(pBuff, L"NETCLIENT", L"RECONNECT", (BYTE*)&m_bIsReconnect))
+		return false;
 	if (!parser.GetValue_Byte(pBuff, L"SERIALIZEBUF", L"PACKET_CODE", &HeaderCode))
 		return false;
-	if (!parser.GetValue_Byte(pBuff, L"SERIALIZEBUF", L"PACKET_KEY1", &XORCode1))
+	if (!parser.GetValue_Byte(pBuff, L"SERIALIZEBUF", L"PACKET_KEY", &XORCode))
 		return false;
-	if (!parser.GetValue_Byte(pBuff, L"SERIALIZEBUF", L"PACKET_KEY2", &XORCode2))
-		return false;
+	//if (!parser.GetValue_Byte(pBuff, L"SERIALIZEBUF", L"PACKET_KEY2", &XORCode2))
+	//	return false;
 	if (!parser.GetValue_Byte(pBuff, L"OPTION", L"LOG_LEVEL", &DebugLevel))
 		return false;
 
 	CNetServerSerializationBuf::m_byHeaderCode = HeaderCode;
-	CNetServerSerializationBuf::m_byXORCode = XORCode1 ^ XORCode2;
+	CNetServerSerializationBuf::m_byXORCode = XORCode;
 	SetLogLevel(DebugLevel);
 
 	return true;
@@ -202,15 +211,19 @@ bool CNetClient::ReleaseSession()
 	}
 
 	closesocket(m_sock);
+	if (!m_bIsReconnect)
+		return true;
+
 	m_sock = INVALID_SOCKET;
 
 	m_sock = socket(AF_INET, SOCK_STREAM, 0);
 	if (m_sock == INVALID_SOCKET)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::LISTEN_SOCKET_ERR;
-		OnError(&Error);
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::LISTEN_SOCKET_ERR;
+		//OnError(&Error);
+		WriteError(WSAGetLastError(), SERVER_ERR::LISTEN_SOCKET_ERR);
 		return false;
 	}
 
@@ -221,7 +234,7 @@ bool CNetClient::ReleaseSession()
 	serveraddr.sin_port = htons(m_wPort);
 
 	int ConnectCnt = 0;
-	_LOG(LOG_LEVEL::LOG_WARNING, L"NetClient", L"ReConnection %d / ThreadID : %d", m_wNumOfReconnect, GetCurrentThreadId());
+	//_LOG(LOG_LEVEL::LOG_WARNING, L"NetClient", L"ReConnection %d / ThreadID : %d", m_wNumOfReconnect, GetCurrentThreadId());
 
 	while (1)
 	{
@@ -233,9 +246,10 @@ bool CNetClient::ReleaseSession()
 	int retval = setsockopt(m_sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&m_bIsNagleOn, sizeof(int));
 	if (retval == SOCKET_ERROR)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		WriteError(WSAGetLastError(), SERVER_ERR::SETSOCKOPT_ERR);
 		return false;
 	}
 
@@ -243,10 +257,11 @@ bool CNetClient::ReleaseSession()
 	retval = setsockopt(m_sock, SOL_SOCKET, SO_SNDBUF, (char*)&SendBufSize, sizeof(SendBufSize));
 	if (retval == SOCKET_ERROR)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
-		OnError(&Error);
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::SETSOCKOPT_ERR;
+		//OnError(&Error);
+		WriteError(WSAGetLastError(), SERVER_ERR::SETSOCKOPT_ERR);
 		return false;
 	}
 
@@ -285,116 +300,126 @@ UINT CNetClient::Worker()
 
 		GetQueuedCompletionStatus(m_hWorkerIOCP, &Transferred, (PULONG_PTR)&pSession, &lpOverlapped, INFINITE);
 		OnWorkerThreadBegin();
-		if (lpOverlapped != NULL)
+		// lpOverlapped 가 NULL 일 경우 오류로 간주함
+		if (lpOverlapped == NULL)
 		{
-			// 외부 종료코드에 의한 종료
-			if (pSession == NULL)
-			{
-				PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, (LPOVERLAPPED)1);
-				break;
-			}
-			// recv 파트
-			SOCKET &IOCompleteSession = *pSession;
-			if (lpOverlapped == &RecvIOData.Overlapped)
-			{
-				// 서버가 종료함(~ 끊김)
-				if (Transferred == 0)
-				{
-					// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
-					if (InterlockedDecrement(&m_IOCount) == 0)
-						ReleaseSession();
-
-					continue;
-				}
-
-				bool IsError = false;
-				RecvIOData.RingBuffer.MoveWritePos(Transferred);
-				int RingBufferRestSize = RecvIOData.RingBuffer.GetUseSize();
-
-				while (RingBufferRestSize > df_HEADER_SIZE)
-				{
-					CNetServerSerializationBuf &RecvSerializeBuf = *CNetServerSerializationBuf::Alloc();
-					RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, df_HEADER_SIZE);
-					RecvSerializeBuf.m_iRead = 0;
-
-					BYTE Code;
-					WORD PayloadLength;
-					RecvSerializeBuf >> Code >> PayloadLength;
-
-					if (Code != CNetServerSerializationBuf::m_byHeaderCode)
-					{
-						cPostRetval = POST_RETVAL_ERR;
-						st_Error Err;
-						Err.GetLastErr = 0;
-						Err.ServerErr = HEADER_CODE_ERR;
-						InterlockedIncrement((UINT*)&checksum);
-						OnError(&Err);
-						IsError = true;
-						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-						break;
-					}
-					if (RingBufferRestSize < PayloadLength + df_HEADER_SIZE)
-					{
-						if (PayloadLength > dfDEFAULTSIZE)
-						{
-							cPostRetval = POST_RETVAL_ERR;
-							st_Error Err;
-							Err.GetLastErr = 0;
-							Err.ServerErr = PAYLOAD_SIZE_OVER_ERR;
-							InterlockedIncrement((UINT*)&payloadOver);
-							OnError(&Err);
-							IsError = true;
-						}
-						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-						break;
-					}
-					RecvIOData.RingBuffer.RemoveData(df_HEADER_SIZE);
-
-					retval = RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
-					RecvSerializeBuf.m_iWrite += retval;
-					if (!RecvSerializeBuf.Decode())
-					{
-						cPostRetval = POST_RETVAL_ERR;
-						st_Error Err;
-						Err.GetLastErr = 0;
-						Err.ServerErr = CHECKSUM_ERR;
-						InterlockedIncrement((UINT*)&HeaderCode);
-						OnError(&Err);
-						IsError = true;
-						CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-						break;
-					}
-
-					RingBufferRestSize -= (retval + df_HEADER_SIZE);
-					OnRecv(&RecvSerializeBuf);
-					CNetServerSerializationBuf::Free(&RecvSerializeBuf);
-				}
-				if (!IsError)
-					cPostRetval = RecvPost();
-			}
-			// send 파트
-			else if (lpOverlapped == &SendIOData.Overlapped)
-			{
-				int BufferCount = SendIOData.lBufferCount;
-				for (int i = 0; i < BufferCount; ++i)
-					CNetServerSerializationBuf::Free(m_pSeirializeBufStore[i]);
-
-				SendIOData.lBufferCount -= BufferCount;
-
-				OnSend(BufferCount);
-				InterlockedExchange(&SendIOData.IOMode, NONSENDING);
-				cPostRetval = SendPost();
-			}
-		}
-		else
-		{
-			st_Error Error;
-			Error.GetLastErr = WSAGetLastError();
-			Error.ServerErr = SERVER_ERR::OVERLAPPED_NULL_ERR;
-			OnError(&Error);
+			WriteError(WSAGetLastError(), SERVER_ERR::OVERLAPPED_NULL_ERR);
 
 			g_Dump.Crash();
 		}
+
+		// 외부 종료코드에 의한 종료
+		if (pSession == NULL)
+		{
+			PostQueuedCompletionStatus(m_hWorkerIOCP, 0, 0, (LPOVERLAPPED)1);
+			break;
+		}
+
+		// recv 파트
+		SOCKET &IOCompleteSession = *pSession;
+		if (lpOverlapped == &RecvIOData.Overlapped)
+		{
+			// 서버가 종료함(~ 끊김)
+			if (Transferred == 0)
+			{
+				// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
+				if (InterlockedDecrement(&m_IOCount) == 0)
+					ReleaseSession();
+
+				continue;
+			}
+
+			bool IsError = false;
+			RecvIOData.RingBuffer.MoveWritePos(Transferred);
+			int RingBufferRestSize = RecvIOData.RingBuffer.GetUseSize();
+
+			while (RingBufferRestSize > df_HEADER_SIZE)
+			{
+				CNetServerSerializationBuf &RecvSerializeBuf = *CNetServerSerializationBuf::Alloc();
+				RecvIOData.RingBuffer.Peek((char*)RecvSerializeBuf.m_pSerializeBuffer, df_HEADER_SIZE);
+				RecvSerializeBuf.m_iRead = 0;
+
+				BYTE Code;
+				WORD PayloadLength;
+				RecvSerializeBuf >> Code >> PayloadLength;
+
+				if (Code != CNetServerSerializationBuf::m_byHeaderCode)
+				{
+					cPostRetval = POST_RETVAL_ERR;
+					//st_Error Err;
+					//Err.GetLastErr = 0;
+					//Err.ServerErr = HEADER_CODE_ERR;
+					//InterlockedIncrement((UINT*)&checksum);
+					//OnError(&Err);
+					WriteError(0, SERVER_ERR::HEADER_CODE_ERR);
+
+					IsError = true;
+					CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+					break;
+				}
+				if (RingBufferRestSize < PayloadLength + df_HEADER_SIZE)
+				{
+					if (PayloadLength > dfDEFAULTSIZE)
+					{
+						cPostRetval = POST_RETVAL_ERR;
+						//st_Error Err;
+						//Err.GetLastErr = 0;
+						//Err.ServerErr = PAYLOAD_SIZE_OVER_ERR;
+						//InterlockedIncrement((UINT*)&payloadOver);
+						//OnError(&Err);
+						WriteError(0, SERVER_ERR::PAYLOAD_SIZE_OVER_ERR);
+						IsError = true;
+					}
+					CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+					break;
+				}
+				RecvIOData.RingBuffer.RemoveData(df_HEADER_SIZE);
+
+				retval = RecvIOData.RingBuffer.Dequeue(&RecvSerializeBuf.m_pSerializeBuffer[RecvSerializeBuf.m_iWrite], PayloadLength);
+				RecvSerializeBuf.m_iWrite += retval;
+				if (!RecvSerializeBuf.Decode())
+				{
+					cPostRetval = POST_RETVAL_ERR;
+					//st_Error Err;
+					//Err.GetLastErr = 0;
+					//Err.ServerErr = CHECKSUM_ERR;
+					//InterlockedIncrement((UINT*)&HeaderCode);
+					//OnError(&Err);
+					WriteError(0, SERVER_ERR::CHECKSUM_ERR);
+					IsError = true;
+					CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+					break;
+				}
+
+				RingBufferRestSize -= (retval + df_HEADER_SIZE);
+				OnRecv(&RecvSerializeBuf);
+				CNetServerSerializationBuf::Free(&RecvSerializeBuf);
+			}
+			if (!IsError)
+				cPostRetval = RecvPost();
+		}
+		// send 파트
+		else if (lpOverlapped == &SendIOData.Overlapped)
+		{
+			int BufferCount = SendIOData.lBufferCount;
+			for (int i = 0; i < BufferCount; ++i)
+				CNetServerSerializationBuf::Free(m_pSeirializeBufStore[i]);
+
+			SendIOData.lBufferCount -= BufferCount;
+
+			OnSend(BufferCount);
+			InterlockedExchange(&SendIOData.IOMode, NONSENDING);
+			cPostRetval = SendPost();
+		}
+		//else
+		//{
+		//	//st_Error Error;
+		//	//Error.GetLastErr = WSAGetLastError();
+		//	//Error.ServerErr = SERVER_ERR::OVERLAPPED_NULL_ERR;
+		//	//OnError(&Error);
+		//	WriteError(0, SERVER_ERR::OVERLAPPED_NULL_ERR);
+		//	g_Dump.Crash();
+		//}
 
 		OnWorkerThreadEnd();
 
@@ -454,10 +479,11 @@ char CNetClient::RecvPost()
 				ReleaseSession();
 				return POST_RETVAL_ERR_SESSION_DELETED;
 			}
-			st_Error Error;
-			Error.GetLastErr = GetLastErr;
-			Error.ServerErr = SERVER_ERR::WSARECV_ERR;
-			OnError(&Error);
+			//st_Error Error;
+			//Error.GetLastErr = GetLastErr;
+			//Error.ServerErr = SERVER_ERR::WSARECV_ERR;
+			//OnError(&Error);
+			WriteError(GetLastErr, SERVER_ERR::WSARECV_ERR);
 			return POST_RETVAL_ERR;
 		}
 	}
@@ -468,10 +494,11 @@ bool CNetClient::SendPacket(CNetServerSerializationBuf *pSerializeBuf)
 {
 	if (pSerializeBuf == NULL)
 	{
-		st_Error Error;
-		Error.GetLastErr = WSAGetLastError();
-		Error.ServerErr = SERVER_ERR::SERIALIZEBUF_NULL_ERR;
-		OnError(&Error);
+		//st_Error Error;
+		//Error.GetLastErr = WSAGetLastError();
+		//Error.ServerErr = SERVER_ERR::SERIALIZEBUF_NULL_ERR;
+		//OnError(&Error);
+		WriteError(WSAGetLastError(), SERVER_ERR::SERIALIZEBUF_NULL_ERR);
 		return false;
 	}
 
@@ -535,7 +562,8 @@ char CNetClient::SendPost()
 			wsaSendBuf[i].buf = m_pSeirializeBufStore[i]->GetBufferPtr();
 			wsaSendBuf[i].len = m_pSeirializeBufStore[i]->GetAllUseSize();
 		}
-		m_SendIOData.lBufferCount += UseSize;
+		//m_SendIOData.lBufferCount += UseSize;
+		m_SendIOData.lBufferCount = UseSize;
 
 		InterlockedIncrement(&m_IOCount);
 		ZeroMemory(&m_SendIOData.Overlapped, sizeof(OVERLAPPED));
@@ -548,10 +576,11 @@ char CNetClient::SendPost()
 			{
 				if (err == WSAENOBUFS)
 					g_Dump.Crash();
-				st_Error Error;
-				Error.GetLastErr = err;
-				Error.ServerErr = SERVER_ERR::WSASEND_ERR;
-				OnError(&Error);
+				//st_Error Error;
+				//Error.GetLastErr = err;
+				//Error.ServerErr = SERVER_ERR::WSASEND_ERR;
+				//OnError(&Error);
+				WriteError(err, SERVER_ERR::WSASEND_ERR);
 
 				// 현재 IOCount를 줄여서 이전값이 1일경우 해당 세션을 삭제함
 				if (InterlockedDecrement(&m_IOCount) == 0)
@@ -578,4 +607,12 @@ void CNetClient::SessionAcquireUnLock()
 {
 	if (InterlockedDecrement(&m_IOCount) == 0)
 		ReleaseSession();
+}
+
+void CNetClient::WriteError(int WindowErr, int UserErr)
+{
+	st_Error Error;
+	Error.GetLastErr = WindowErr;
+	Error.ServerErr = UserErr;
+	OnError(&Error);
 }

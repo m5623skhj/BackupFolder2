@@ -1,7 +1,7 @@
 #pragma once
 #include "LockFreeMemoryPool.h"
 
-#define dfDEFAULTSIZE		1024
+#define dfDEFAULTSIZE		512
 #define BUFFFER_MAX			10000
 
 // Header 의 크기를 결정함
@@ -13,41 +13,39 @@
 // 혹은 GetLastWrite() 를 사용하여 사용자가 쓴 마지막 값을 사이즈로 넘겨줌
 #define df_HEADER_SIZE		5
 
-#define NUM_OF_CHUNK		10
-
-//#define df_HEADER_CODE		(BYTE)0x11
-// 헤더에 들어갈 암호화용 XOR 고정 코드
-// 고정 코드 2개에 대하여 XOR 한 코드임
-//#define df_XOR_CODE			(BYTE)0x41
+#define dfNUM_OF_NETBUF_CHUNK		10
 
 #define df_RAND_CODE_LOCATION		 3
 #define df_CHECKSUM_CODE_LOCATION	 4
 
 class CNetServer;
-class CLanClient;
+class CNetClient;
+class CMMOServer;
+class CSession;
 
 class CNetServerSerializationBuf
 {
 private:
 	BYTE		m_byError;
-	BOOL		m_bIsEncoded;
-	int			m_iWrite;
-	int			m_iRead;
-	int			m_iSize;
+	bool		m_bIsEncoded;
+	WORD		m_iWrite;
+	WORD		m_iRead;
+	WORD		m_iSize;
 	// WritePtrSetHeader 함수로 부터 마지막에 쓴 공간을 기억함
-	int			m_iWriteLast;
-	int			m_iUserWriteBefore;
+	WORD		m_iWriteLast;
+	WORD		m_iUserWriteBefore;
 	UINT		m_iRefCount;
 	char		*m_pSerializeBuffer;
 	//static CLockFreeMemoryPool<CSerializationBuf>	*pMemoryPool;
 
+	static CTLSMemoryPool<CNetServerSerializationBuf>		*pMemoryPool;
 	static BYTE												m_byHeaderCode;
 	static BYTE												m_byXORCode;
 
-	static CTLSMemoryPool<CNetServerSerializationBuf>		*pMemoryPool;
-
 	friend CNetServer;
-	friend CLanClient;
+	friend CNetClient;
+	friend CMMOServer;
+	friend CSession;
 private:
 	void Initialize(int BufferSize);
 
@@ -67,14 +65,14 @@ private:
 	// 원하는 길이만큼 읽기 위치에서 삭제
 	void RemoveData(int Size);
 
-	void Encode();
-	bool Decode();
 
 	// 서버 종료 할 때만 사용 할 것
 	static void ChunkFreeForcibly();
 
 	int GetAllUseSize();
 public:
+	void Encode();
+	bool Decode();
 	CNetServerSerializationBuf();
 	~CNetServerSerializationBuf();
 
@@ -112,8 +110,11 @@ public:
 
 	static CNetServerSerializationBuf*	Alloc();
 	static void							AddRefCount(CNetServerSerializationBuf* AddRefBuf);
+	//static void							AddRefCount(CNetServerSerializationBuf* AddRefBuf, int AddNumber);
 	static void							Free(CNetServerSerializationBuf* DeleteBuf);
-
+	static int							GetUsingSerializeBufNodeCount();
+	static int							GetUsingSerializeBufChunkCount();
+	static int							GetAllocSerializeBufChunkCount();
 
 	CNetServerSerializationBuf& operator<<(int Input);
 	CNetServerSerializationBuf& operator<<(WORD Input);

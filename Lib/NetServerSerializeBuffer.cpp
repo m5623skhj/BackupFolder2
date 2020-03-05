@@ -3,7 +3,7 @@
 #include "NetServer.h"
 #include "LockFreeMemoryPool.h"
 
-CTLSMemoryPool<CNetServerSerializationBuf>* CNetServerSerializationBuf::pMemoryPool = new CTLSMemoryPool<CNetServerSerializationBuf>(NUM_OF_CHUNK, false);
+CTLSMemoryPool<CNetServerSerializationBuf>* CNetServerSerializationBuf::pMemoryPool = new CTLSMemoryPool<CNetServerSerializationBuf>(dfNUM_OF_NETBUF_CHUNK, false);
 extern CParser g_Paser;
 
 BYTE CNetServerSerializationBuf::m_byHeaderCode = 0;
@@ -246,6 +246,103 @@ void CNetServerSerializationBuf::Encode()
 
 	// 페이로드 크기 삽입
 	int WirteLast = m_iWriteLast;
+	//int WirteLast = m_iWriteLast;
+	int Read = m_iRead;
+	short PayloadLength = WirteLast - df_HEADER_SIZE;
+	*((short*)(&pThisBuffer[NowWrite])) = *(short*)&PayloadLength;
+	NowWrite += 2;
+
+	// 난수 XOR 코드 생성
+	BYTE RandCode = (BYTE)(rand() & 255);
+	BYTE XORCode = m_byXORCode;
+
+	// 체크섬 생성 및 페이로드와 체크섬 암호화
+	WORD PayloadSum = 0;
+	BYTE BeforeRandomXORByte = 0;
+	BYTE BeforeFixedXORByte = 0;
+	WORD NumOfRootine = 1;
+
+	for (int BufIdx = df_HEADER_SIZE; BufIdx < WirteLast; ++BufIdx)
+		PayloadSum += pThisBuffer[BufIdx];
+
+	pThisBuffer[df_CHECKSUM_CODE_LOCATION] = (BYTE)(PayloadSum & 255);
+
+	// 체크섬 부터 암호화를 할 것이기 때문에
+	// df_CHECKSUM_CODE_LOCATION 부터 반복문을 실행함
+	for (int BufIdx = df_CHECKSUM_CODE_LOCATION; BufIdx < WirteLast; ++BufIdx)
+	{
+		BeforeRandomXORByte = pThisBuffer[BufIdx] ^ (BeforeRandomXORByte + RandCode + NumOfRootine);
+		BeforeFixedXORByte = BeforeRandomXORByte ^ (BeforeFixedXORByte + XORCode + NumOfRootine);
+		pThisBuffer[BufIdx] = BeforeFixedXORByte;
+		++NumOfRootine;
+	}
+
+	// 암호화 된 랜덤코드 삽입
+	pThisBuffer[df_RAND_CODE_LOCATION] = RandCode;
+
+	m_iWrite = df_HEADER_SIZE;
+	m_bIsEncoded = TRUE;
+}
+
+// 헤더 순서
+// Code(1) Length(2) Random XOR Code(1) CheckSum(1)
+bool CNetServerSerializationBuf::Decode()
+{
+	char *(&pThisBuffer) = m_pSerializeBuffer;
+	BYTE RandCode = pThisBuffer[df_RAND_CODE_LOCATION];
+
+	// 체크섬 생성 및 페이로드와 체크섬 복호화
+	WORD PayloadSum = 0;
+	BYTE BeforeRandomXORByte = 0;
+	BYTE BeforeEncodedValue = 0;
+	WORD NumOfRootine = 1;
+	BYTE XORCode = m_byXORCode;
+
+	BYTE SaveRandom;
+	BYTE SaveEncoded;
+
+	SaveEncoded = pThisBuffer[df_CHECKSUM_CODE_LOCATION];
+	SaveRandom = pThisBuffer[df_CHECKSUM_CODE_LOCATION] ^ (XORCode + NumOfRootine);
+	pThisBuffer[df_CHECKSUM_CODE_LOCATION] = SaveRandom ^ (RandCode + NumOfRootine);
+
+	++NumOfRootine;
+	BeforeEncodedValue = SaveEncoded;
+	BeforeRandomXORByte = SaveRandom;
+
+	// 체크섬은 이미 복호화 되었으므로
+	// df_HEADER_SIZE 부터 반복문을 실행함
+	for (int BufIdx = df_HEADER_SIZE; BufIdx < m_iWrite; ++BufIdx)
+	{
+		SaveEncoded = pThisBuffer[BufIdx];
+		SaveRandom = pThisBuffer[BufIdx] ^ (BeforeEncodedValue + XORCode + NumOfRootine);
+		pThisBuffer[BufIdx] = SaveRandom ^ (BeforeRandomXORByte + RandCode + NumOfRootine);
+
+		++NumOfRootine;
+		PayloadSum += pThisBuffer[BufIdx];
+		BeforeEncodedValue = SaveEncoded;
+		BeforeRandomXORByte = SaveRandom;
+	}
+
+	if (((BYTE)pThisBuffer[df_CHECKSUM_CODE_LOCATION]) != (PayloadSum & 255))
+		return false;
+
+	m_iRead = df_HEADER_SIZE;
+	return true;
+}
+
+/*
+// 헤더 순서
+// Code(1) Length(2) Random XOR Code(1) CheckSum(1)
+void CNetServerSerializationBuf::Encode()
+{
+	// 헤더 코드 삽입
+	int NowWrite = 0;
+	char *(&pThisBuffer) = m_pSerializeBuffer;
+	pThisBuffer[NowWrite] = m_byHeaderCode;
+	++NowWrite;
+
+	// 페이로드 크기 삽입
+	int WirteLast = m_iWriteLast;
 	int Read = m_iRead;
 	short PayloadLength = WirteLast - df_HEADER_SIZE;
 	*((short*)(&pThisBuffer[NowWrite])) = *(short*)&PayloadLength;
@@ -292,6 +389,7 @@ bool CNetServerSerializationBuf::Decode()
 	m_iRead = df_HEADER_SIZE;
 	return true;
 }
+*/
 
 //////////////////////////////////////////////////////////////////
 // static
@@ -307,6 +405,11 @@ void CNetServerSerializationBuf::AddRefCount(CNetServerSerializationBuf* AddRefB
 {
 	InterlockedIncrement(&AddRefBuf->m_iRefCount);
 }
+
+//void CNetServerSerializationBuf::AddRefCount(CNetServerSerializationBuf* AddRefBuf, int AddNumber)
+//{
+//	InterlockedAdd((LONG*)&AddRefBuf->m_iRefCount, AddNumber);
+//}
 
 void CNetServerSerializationBuf::Free(CNetServerSerializationBuf* DeleteBuf)
 {
@@ -326,6 +429,21 @@ void CNetServerSerializationBuf::Free(CNetServerSerializationBuf* DeleteBuf)
 void CNetServerSerializationBuf::ChunkFreeForcibly()
 {
 	CNetServerSerializationBuf::pMemoryPool->ChunkFreeForcibly();
+}
+
+int CNetServerSerializationBuf::GetUsingSerializeBufNodeCount()
+{
+	return CNetServerSerializationBuf::pMemoryPool->GetUseNodeCount();
+}
+
+int CNetServerSerializationBuf::GetUsingSerializeBufChunkCount()
+{
+	return CNetServerSerializationBuf::pMemoryPool->GetUseChunkCount();
+}
+
+int CNetServerSerializationBuf::GetAllocSerializeBufChunkCount()
+{
+	return CNetServerSerializationBuf::pMemoryPool->GetAllocChunkCount();
 }
 
 //////////////////////////////////////////////////////////////////
