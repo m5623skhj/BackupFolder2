@@ -121,6 +121,14 @@ public:
 	CSerializationBuf& operator<<(UINT Input);
 	CSerializationBuf& operator<<(UINT64 Input);
 	CSerializationBuf& operator<<(__int64 Input);
+	CSerializationBuf& operator<<(std::list<std::string>& input);
+	CSerializationBuf& operator<<(std::list<std::wstring>& input);
+	template<typename T>
+	CSerializationBuf& operator<<(T& input)
+	{
+		WriteBuffer((char*)&input, sizeof(T));
+		return *this;
+	}
 	template<typename T>
 	CSerializationBuf& operator<<(std::list<T>& input)
 	{
@@ -134,8 +142,6 @@ public:
 
 		return *this;
 	}
-	CSerializationBuf& operator<<(std::list<std::string>& input);
-	CSerializationBuf& operator<<(std::list<std::wstring>& input);
 
 	CSerializationBuf& operator>>(int &Input);
 	CSerializationBuf& operator>>(WORD &Input);
@@ -146,6 +152,12 @@ public:
 	CSerializationBuf& operator>>(UINT &Input);
 	CSerializationBuf& operator>>(UINT64 &Input);
 	CSerializationBuf& operator>>(__int64 &Input);
+	template<typename T>
+	CSerializationBuf& operator>>(T& input)
+	{
+		ReadBuffer((char*)&input, sizeof(input));
+		return *this;
+	}
 	template<typename T>
 	CSerializationBuf& operator>>(std::list<T>& input)
 	{

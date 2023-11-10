@@ -142,6 +142,12 @@ public:
 	CNetServerSerializationBuf& operator<<(std::string& input);
 	CNetServerSerializationBuf& operator<<(std::wstring& input);
 	template<typename T>
+	CNetServerSerializationBuf& operator<<(T& input)
+	{
+		WriteBuffer((char*)&input, sizeof(T));
+		return *this;
+	}
+	template<typename T>
 	CNetServerSerializationBuf& operator<<(std::list<T>& input)
 	{
 		size_t listSize = input.size();
@@ -168,6 +174,12 @@ public:
 	CNetServerSerializationBuf& operator>>(__int64 &Input);
 	CNetServerSerializationBuf& operator>>(std::string& input);
 	CNetServerSerializationBuf& operator>>(std::wstring& input);
+	template<typename T>
+	CNetServerSerializationBuf& operator>>(T& input)
+	{
+		ReadBuffer((char*)&input, sizeof(input));
+		return *this;
+	}
 	template<typename T>
 	CNetServerSerializationBuf& operator>>(std::list<T>& input)
 	{
