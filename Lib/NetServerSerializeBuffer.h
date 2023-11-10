@@ -1,16 +1,17 @@
 #pragma once
 #include "LockFreeMemoryPool.h"
+#include <list>
 
-#define dfDEFAULTSIZE		512
+#define dfDEFAULTSIZE		1024
 #define BUFFFER_MAX			10000
 
 // Header 의 크기를 결정함
 // 프로그램마다 유동적임
-// 헤더 크기에 따라 수정할 것
+// ?E갋크기에 따턿E수정할 것
 // 또한 내부에서 반드시 
-// WritePtrSetHeader() 와 WritePtrSetLast() 를 사용함으로써
-// 헤더 시작 부분과 페이로드 마지막 부분으로 포인터를 옮겨줘야 함
-// 혹은 GetLastWrite() 를 사용하여 사용자가 쓴 마지막 값을 사이즈로 넘겨줌
+// WritePtrSetHeader() 와 WritePtrSetLast() 를 사퓖E纛막館갋
+// ?E갋시작 부분컖E페이로탛E마지막 부분으로 포인터를 옮겨줘야 함
+// 혹은 GetLastWrite() 를 사퓖E臼?사퓖E微?쓴 마지막 값을 사이짊踏 넘겨줌
 #define df_HEADER_SIZE		5
 
 #define dfNUM_OF_NETBUF_CHUNK		10
@@ -21,7 +22,11 @@
 class CNetServer;
 class CNetClient;
 class CMMOServer;
+class CP2P;
 class CSession;
+class RIOTestServer;
+class RIOTestSession;
+class IOCPServer;
 
 class CNetServerSerializationBuf
 {
@@ -31,7 +36,7 @@ private:
 	WORD		m_iWrite;
 	WORD		m_iRead;
 	WORD		m_iSize;
-	// WritePtrSetHeader 함수로 부터 마지막에 쓴 공간을 기억함
+	// WritePtrSetHeader 함수로 부터 마지막에 쓴 공간을 기푳E?
 	WORD		m_iWriteLast;
 	WORD		m_iUserWriteBefore;
 	UINT		m_iRefCount;
@@ -46,30 +51,35 @@ private:
 	friend CNetClient;
 	friend CMMOServer;
 	friend CSession;
+	friend RIOTestServer;
+	friend RIOTestSession;
+	friend IOCPServer;
 private:
 	void Initialize(int BufferSize);
 
 	void SetWriteZero();
-	// 쓰기 포인터의 마지막 공간을 변수에 기억하고
-	// 쓰기 포인터를 직렬화 버퍼 가장 처음으로 옮김
+	// 쓰콅E포인터의 마지막 공간을 변수에 기푳E構갋
+	// 쓰콅E포인터를 직렬화 버퍼 가픸E처음으로 옮콅E
 	void WritePtrSetHeader();
-	// 쓰기 포인터를 이전에 사용했던 공간의 마지막 부분으로 이동시킴
+	// 쓰콅E포인터를 이픸E?사퓖E杉갋공간의 마지막 부분으로 이동시킴
 	void WritePtrSetLast();
 
-	// 버퍼의 처음부터 사용자가
-	// 마지막으로 쓴 공간까지의 차를 구함
+	// 버퍼의 처음부터 사퓖E微?
+	// 마지막으로 쓴 공간깩痺의 차를 구함
 	int GetLastWrite();
 
 	char *GetBufferPtr();
 	
-	// 원하는 길이만큼 읽기 위치에서 삭제
+	// 원하는 길이만큼 읽콅E위치에서 삭제
 	void RemoveData(int Size);
 
 
-	// 서버 종료 할 때만 사용 할 것
+	// 서퉩E종톩E할 때만 사퓖E할 것
 	static void ChunkFreeForcibly();
 
 	int GetAllUseSize();
+	FORCEINLINE void CheckReadBufferSize(int needSize);
+	FORCEINLINE void CheckWriteBufferSize(int needSize);
 public:
 	void Encode();
 	bool Decode();
@@ -79,29 +89,33 @@ public:
 	void Init();
 
 	void WriteBuffer(char *pData, int Size);
+	void WriteBuffer(const std::string& dest);
+	void WriteBuffer(const std::wstring& dest);
 	void ReadBuffer(char *pDest, int Size);
+	void ReadBuffer(OUT std::string& dest);
+	void ReadBuffer(OUT std::wstring& dest);
 	void PeekBuffer(char *pDest, int Size);
 
 	char *GetReadBufferPtr();
 	char *GetWriteBufferPtr();
 
-	// 새로 버퍼크기를 할당하여 이전 데이터를 옮김
+	// 새로 버퍼크기를 할당하여 이픸E데이터를 옮콅E
 	void Resize(int Size);
 
-	// 원하는 길이만큼 읽기 쓰기 위치 이동
+	// 원하는 길이만큼 읽콅E쓰콅E위치 이동
 	void MoveWritePos(int Size);
-	// ThisPos로 쓰기 포인터를 이동시킴
+	// ThisPos로 쓰콅E포인터를 이동시킴
 	void MoveWritePosThisPos(int ThisPos);
-	// MoveWritePosThisPos 로 이동하기 이전 쓰기 포인터로 이동시킴
-	// 위 함수를 사용하지 않고 이 함수를 호출할 경우
-	// 쓰기 포인터를 가장 처음으로 이동시킴
+	// MoveWritePosThisPos 로 이동하콅E이픸E쓰콅E포인터로 이동시킴
+	// 위 함수를 사퓖E舊갋않컖E이 함수를 호출할 경퓖E
+	// 쓰콅E포인터를 가픸E처음으로 이동시킴
 	void MoveWritePosBeforeCallThisPos();
 
 
 	// --------------- 반환값 ---------------
 	// 0 : 정상처리 되었음
-	// 1 : 버퍼를 읽으려고 하였으나, 읽는 공간이 버퍼 크기보다 크거나 아직 쓰여있지 않은 공간임
-	// 2 : 버퍼를 쓰려고 하였으나, 쓰는 공간이 버퍼 크기보다 큼
+	// 1 : 버퍼를 읽으려컖E하였으나, 읽는 공간이 버퍼 크기보다 크거나 아햨E쓰여있햨E않은 공간임
+	// 2 : 버퍼를 쓰려컖E하였으나, 쓰는 공간이 버퍼 크기보다 큼
 	// --------------- 반환값 ---------------
 	BYTE GetBufferError();
 
@@ -125,6 +139,23 @@ public:
 	CNetServerSerializationBuf& operator<<(UINT Input);
 	CNetServerSerializationBuf& operator<<(UINT64 Input);
 	CNetServerSerializationBuf& operator<<(__int64 Input);
+	CNetServerSerializationBuf& operator<<(std::string& input);
+	CNetServerSerializationBuf& operator<<(std::wstring& input);
+	template<typename T>
+	CNetServerSerializationBuf& operator<<(std::list<T>& input)
+	{
+		size_t listSize = input.size();
+		WriteBuffer((char*)&listSize, sizeof(listSize));
+
+		for (auto& item : input)
+		{
+			WriteBuffer((char*)&item, sizeof(T));
+		}
+
+		return *this;
+	}
+	CNetServerSerializationBuf& operator<<(std::list<std::string>& input);
+	CNetServerSerializationBuf& operator<<(std::list<std::wstring>& input);
 
 	CNetServerSerializationBuf& operator>>(int &Input);
 	CNetServerSerializationBuf& operator>>(WORD &Input);
@@ -135,5 +166,25 @@ public:
 	CNetServerSerializationBuf& operator>>(UINT &Input);
 	CNetServerSerializationBuf& operator>>(UINT64 &Input);
 	CNetServerSerializationBuf& operator>>(__int64 &Input);
+	CNetServerSerializationBuf& operator>>(std::string& input);
+	CNetServerSerializationBuf& operator>>(std::wstring& input);
+	template<typename T>
+	CNetServerSerializationBuf& operator>>(std::list<T>& input)
+	{
+		size_t listSize = input.size();
+		ReadBuffer((char*)&listSize, sizeof(listSize));
+
+		for (size_t i = 0; i < listSize; ++i)
+		{
+			T item;
+			ReadBuffer((char*)&item, sizeof(T));
+			input.push_back(std::move(item));
+		}
+
+		return *this;
+	}
+	CNetServerSerializationBuf& operator>>(std::list<std::string>& input);
+	CNetServerSerializationBuf& operator>>(std::list<std::wstring>& input);
 };
 
+using NetBuffer = CNetServerSerializationBuf;
