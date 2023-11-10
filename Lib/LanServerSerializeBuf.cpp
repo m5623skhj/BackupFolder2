@@ -14,7 +14,7 @@ CSerializationBuf::CSerializationBuf() :
 	m_byError(0), m_iWrite(HEADER_SIZE), m_iRead(HEADER_SIZE), m_iWriteLast(0),
 	m_iUserWriteBefore(HEADER_SIZE), m_iRefCount(1), m_bHeaderInputted(FALSE)
 {		
-	Initialize(dfDEFAULTSIZE);
+	Initialize(dfLAN_DEFAULTSIZE);
 }
 
 CSerializationBuf::~CSerializationBuf()
@@ -61,16 +61,7 @@ void CSerializationBuf::Resize(int Size)
 
 void CSerializationBuf::WriteBuffer(char *pData, int Size)
 {
-	if (BUFFFER_MAX < m_iWrite + Size)
-	{
-		m_byError = 2;
-		st_Exception e;
-		wcscpy_s(e.ErrorCode, L"ErrorCode : 2");
-		wsprintf(e.szErrorComment,
-			L"%s Line %d\n\n버퍼에 쓰려고 하였으나, 버퍼 공간보다 더 큰 값이 들어왔습니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
-			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, Size);
-		throw e;
-	}
+	CheckWriteBufferSize(Size);
 
 	switch (Size)
 	{
@@ -93,18 +84,36 @@ void CSerializationBuf::WriteBuffer(char *pData, int Size)
 	m_iWrite += Size;
 }
 
+void CSerializationBuf::WriteBuffer(const std::string& dest)
+{
+	size_t stringSize = dest.length();
+	size_t needSize = stringSize + sizeof(size_t);
+	CheckWriteBufferSize(static_cast<int>(needSize));
+
+	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&stringSize;
+	m_iWrite += static_cast<int>(sizeof(stringSize));
+
+	memcpy_s(&m_pSerializeBuffer[m_iWrite], stringSize, dest.c_str(), stringSize);
+	m_iWrite += static_cast<int>(stringSize);
+}
+
+void CSerializationBuf::WriteBuffer(const std::wstring& dest)
+{
+	size_t stringLength = dest.length();
+	size_t stringSize = stringLength * 2;
+	size_t needSize = stringSize + sizeof(size_t);
+	CheckWriteBufferSize(static_cast<int>(needSize));
+
+	*((long long*)(&m_pSerializeBuffer[m_iWrite])) = *(long long*)&stringSize;
+	m_iWrite += static_cast<int>(sizeof(stringSize));
+
+	memcpy_s(&m_pSerializeBuffer[m_iWrite], stringSize, dest.c_str(), stringSize);
+	m_iWrite += static_cast<int>(stringSize);
+}
+
 void CSerializationBuf::ReadBuffer(char *pDest, int Size)
 {
-	if (m_iSize < m_iRead + Size || m_iWrite < m_iRead + Size)
-	{
-		m_byError = 1;
-		st_Exception e;
-		wcscpy_s(e.ErrorCode, L"ErrorCode : 1");
-		wsprintf(e.szErrorComment,
-			L"%s Line %d\n\n버퍼를 읽으려고 하였으나, 읽으려고 했던 공간이 버퍼 크기보다 크거나 아직 쓰여있지 않은 공간입니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
-			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, Size);
-		throw e;
-	}
+	CheckReadBufferSize(Size);
 
 	switch (Size)
 	{
@@ -127,6 +136,30 @@ void CSerializationBuf::ReadBuffer(char *pDest, int Size)
 	m_iRead += Size;
 }
 
+void CSerializationBuf::ReadBuffer(OUT std::string& dest)
+{
+	size_t stringSize = sizeof(size_t);
+	CheckReadBufferSize((int)stringSize);
+	*((long long*)(&stringSize)) = *(long long*)&m_pSerializeBuffer[m_iRead];
+	m_iRead += static_cast<int>(sizeof(size_t));
+
+	CheckReadBufferSize((int)stringSize);
+	dest.assign(&m_pSerializeBuffer[m_iRead], static_cast<int>(stringSize));
+	m_iRead += static_cast<int>(stringSize);
+}
+
+void CSerializationBuf::ReadBuffer(OUT std::wstring& dest)
+{
+	size_t stringSize = sizeof(size_t);
+	CheckReadBufferSize((int)stringSize);
+	*((long long*)(&stringSize)) = *(long long*)&m_pSerializeBuffer[m_iRead];
+	m_iRead += static_cast<int>(sizeof(size_t));
+
+	CheckReadBufferSize((int)stringSize);
+	dest.assign((wchar_t*)&m_pSerializeBuffer[m_iRead], static_cast<int>(stringSize / 2));
+	m_iRead += static_cast<int>(stringSize);
+}
+
 void CSerializationBuf::PeekBuffer(char *pDest, int Size)
 {
 	memcpy_s(pDest, Size, &m_pSerializeBuffer[m_iRead], Size);
@@ -134,31 +167,13 @@ void CSerializationBuf::PeekBuffer(char *pDest, int Size)
 
 void CSerializationBuf::RemoveData(int Size)
 {
-	if (m_iSize < m_iRead + Size || m_iWrite < m_iRead + Size)
-	{
-		m_byError = 1;
-		st_Exception e;
-		wcscpy_s(e.ErrorCode, L"ErrorCode : 1");
-		wsprintf(e.szErrorComment,
-			L"%s Line %d\n\n버퍼를 읽으려고 하였으나, 읽으려고 했던 공간이 버퍼 크기보다 크거나 아직 쓰여있지 않은 공간입니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
-			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, Size);
-		throw e;
-	}
+	CheckReadBufferSize(Size);
 	m_iRead += Size;
 }
 
 void CSerializationBuf::MoveWritePos(int Size)
 {
-	if (m_iSize < m_iWrite + Size + HEADER_SIZE)
-	{
-		m_byError = 2;
-		st_Exception e;
-		wcscpy_s(e.ErrorCode, L"ErrorCode : 2");
-		wsprintf(e.szErrorComment,
-			L"%s Line %d\n\n버퍼에 쓰려고 하였으나, 버퍼 공간보다 더 큰 값이 들어왔습니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
-			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, Size);
-		throw e;
-	}
+	CheckWriteBufferSize(Size);
 	m_iWrite += Size;
 }
 
@@ -228,6 +243,35 @@ void CSerializationBuf::WritePtrSetLast()
 {
 	m_iWrite = m_iWriteLast;
 }
+
+void CSerializationBuf::CheckReadBufferSize(int needSize)
+{
+	if (m_iSize < m_iRead + needSize || m_iWrite < m_iRead + needSize)
+	{
+		m_byError = 1;
+		st_Exception e;
+		wcscpy_s(e.ErrorCode, L"ErrorCode : 1");
+		wsprintf(e.szErrorComment,
+			L"%s Line %d\n\n버퍼를 읽으려고 하였으나, 읽으려고 했던 공간이 버퍼 크기보다 크거나 아직 쓰여있지 않은 공간입니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
+			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, needSize);
+		throw e;
+	}
+}
+
+void CSerializationBuf::CheckWriteBufferSize(int needSize)
+{
+	if (BUFFFER_MAX < m_iWrite + needSize)
+	{
+		m_byError = 2;
+		st_Exception e;
+		wcscpy_s(e.ErrorCode, L"ErrorCode : 2");
+		wsprintf(e.szErrorComment,
+			L"%s Line %d\n\n버퍼에 쓰려고 하였으나, 버퍼 공간보다 더 큰 값이 들어왔습니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
+			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, needSize);
+		throw e;
+	}
+}
+
 
 //////////////////////////////////////////////////////////////////
 // static
@@ -344,6 +388,32 @@ CSerializationBuf &CSerializationBuf::operator<<(__int64 Input)
 	return *this;
 }
 
+CSerializationBuf& CSerializationBuf::operator<<(std::list<std::string>& input)
+{
+	size_t listSize = input.size();
+	WriteBuffer((char*)&listSize, sizeof(listSize));
+
+	for (auto& item : input)
+	{
+		WriteBuffer(item);
+	}
+
+	return *this;
+}
+
+CSerializationBuf& CSerializationBuf::operator<<(std::list<std::wstring>& input)
+{
+	size_t listSize = input.size();
+	WriteBuffer((char*)&listSize, sizeof(listSize));
+
+	for (auto& item : input)
+	{
+		WriteBuffer(item);
+	}
+
+	return *this;
+}
+
 //////////////////////////////////////////////////////////////////
 // Operator >>
 //////////////////////////////////////////////////////////////////
@@ -402,5 +472,35 @@ CSerializationBuf &CSerializationBuf::operator>>(__int64 &Input)
 {
 	*((long long*)(&Input)) = *(long long*)&m_pSerializeBuffer[m_iRead];
 	m_iRead += sizeof(__int64);
+	return *this;
+}
+
+CSerializationBuf& CSerializationBuf::operator>>(std::list<std::string>& input)
+{
+	size_t listSize;
+	ReadBuffer((char*)&listSize, sizeof(listSize));
+
+	for (size_t i = 0; i < listSize; ++i)
+	{
+		std::string item;
+		ReadBuffer(item);
+		input.push_back(std::move(item));
+	}
+
+	return *this;
+}
+
+CSerializationBuf& CSerializationBuf::operator>>(std::list<std::wstring>& input)
+{
+	size_t listSize;
+	ReadBuffer((char*)&listSize, sizeof(listSize));
+
+	for (size_t i = 0; i < listSize; ++i)
+	{
+		std::wstring item;
+		ReadBuffer(item);
+		input.push_back(std::move(item));
+	}
+
 	return *this;
 }

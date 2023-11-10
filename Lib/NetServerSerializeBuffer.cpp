@@ -172,16 +172,7 @@ void CNetServerSerializationBuf::PeekBuffer(char *pDest, int Size)
 
 void CNetServerSerializationBuf::RemoveData(int Size)
 {
-	if (m_iSize < m_iRead + Size || m_iWrite < m_iRead + Size)
-	{
-		m_byError = 1;
-		st_Exception e;
-		wcscpy_s(e.ErrorCode, L"ErrorCode : 1");
-		wsprintf(e.szErrorComment,
-			L"%s Line %d\n\n버퍼를 읽으려고 하였으나, 읽으려고 했던 공간이 버퍼 크기보다 크거나 아직 쓰여있지 않은 공간입니다.\nWrite = %d Read = %d BufferSize = %d InputSize = %d\n\n프로그램을 종료합니다"
-			, TEXT(__FILE__), __LINE__, m_iWrite, m_iRead, m_iSize, Size);
-		throw e;
-	}
+	CheckReadBufferSize(Size);
 	m_iRead += Size;
 }
 

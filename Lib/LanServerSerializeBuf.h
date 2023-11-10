@@ -2,8 +2,9 @@
 //#include "LanServer.h"
 #include "LockFreeMemoryPool.h"
 #include <Windows.h>
+#include <list>
 
-#define dfDEFAULTSIZE		512
+#define dfLAN_DEFAULTSIZE	512
 #define BUFFFER_MAX			10000
 
 // Header 의 크기를 결정함
@@ -17,6 +18,7 @@
 
 class CLanServer;
 class CLanClient;
+class CMultiLanClient;
 
 class CSerializationBuf
 {
@@ -38,6 +40,7 @@ private:
 
 	friend CLanServer;
 	friend CLanClient;
+	friend CMultiLanClient;
 private:
 	void Initialize(int BufferSize);
 
@@ -64,6 +67,8 @@ private:
 	static void ChunkFreeForcibly();
 
 	int GetAllUseSize();
+	FORCEINLINE void CheckReadBufferSize(int needSize);
+	FORCEINLINE void CheckWriteBufferSize(int needSize);
 public:
 	CSerializationBuf();
 	~CSerializationBuf();
@@ -84,7 +89,11 @@ public:
 
 	char *GetReadBufferPtr();
 	void WriteBuffer(char *pData, int Size);
-	void ReadBuffer(char *pDest, int Size);
+	void WriteBuffer(const std::string& dest);
+	void WriteBuffer(const std::wstring& dest);
+	void ReadBuffer(char* pDest, int Size);
+	void ReadBuffer(OUT std::string& dest);
+	void ReadBuffer(OUT std::wstring& dest);
 
 	// --------------- 반환값 ---------------
 	// 0 : 정상처리 되었음
@@ -112,6 +121,21 @@ public:
 	CSerializationBuf& operator<<(UINT Input);
 	CSerializationBuf& operator<<(UINT64 Input);
 	CSerializationBuf& operator<<(__int64 Input);
+	template<typename T>
+	CSerializationBuf& operator<<(std::list<T>& input)
+	{
+		size_t listSize = input.size();
+		WriteBuffer((char*)&listSize, sizeof(listSize));
+
+		for (auto& item : input)
+		{
+			WriteBuffer((char*)&item, sizeof(T));
+		}
+
+		return *this;
+	}
+	CSerializationBuf& operator<<(std::list<std::string>& input);
+	CSerializationBuf& operator<<(std::list<std::wstring>& input);
 
 	CSerializationBuf& operator>>(int &Input);
 	CSerializationBuf& operator>>(WORD &Input);
@@ -122,5 +146,22 @@ public:
 	CSerializationBuf& operator>>(UINT &Input);
 	CSerializationBuf& operator>>(UINT64 &Input);
 	CSerializationBuf& operator>>(__int64 &Input);
+	template<typename T>
+	CSerializationBuf& operator>>(std::list<T>& input)
+	{
+		size_t listSize = input.size();
+		ReadBuffer((char*)&listSize, sizeof(listSize));
+
+		for (size_t i = 0; i < listSize; ++i)
+		{
+			T item;
+			ReadBuffer((char*)&item, sizeof(T));
+			input.push_back(std::move(item));
+		}
+
+		return *this;
+	}
+	CSerializationBuf& operator>>(std::list<std::string>& input);
+	CSerializationBuf& operator>>(std::list<std::wstring>& input);
 };
 
