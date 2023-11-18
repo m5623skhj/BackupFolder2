@@ -56,7 +56,6 @@ private:
 	int GetLastWrite();
 
 	char *GetBufferPtr();
-	char *GetWriteBufferPtr();
 
 	void PeekBuffer(char *pDest, int Size);
 
@@ -88,6 +87,8 @@ public:
 	void MoveWritePosBeforeCallThisPos();
 
 	char *GetReadBufferPtr();
+	char* GetWriteBufferPtr();
+
 	void WriteBuffer(char *pData, int Size);
 	void WriteBuffer(const std::string& dest);
 	void WriteBuffer(const std::wstring& dest);
